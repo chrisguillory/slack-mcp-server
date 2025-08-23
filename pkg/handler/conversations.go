@@ -393,7 +393,9 @@ func (ch *ConversationsHandler) convertMessagesFromHistory(slackMessages []slack
 
 		var reactionParts []string
 		for _, r := range msg.Reactions {
-			reactionParts = append(reactionParts, fmt.Sprintf("%s:%d", r.Name, r.Count))
+			// Include user IDs who reacted: emoji:count:user1,user2
+			userList := strings.Join(r.Users, ",")
+			reactionParts = append(reactionParts, fmt.Sprintf("%s:%d:%s", r.Name, r.Count, userList))
 		}
 		reactionsString := strings.Join(reactionParts, "|")
 
