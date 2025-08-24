@@ -103,9 +103,57 @@ s.AddTool(mcp.NewTool("emoji_list",
 
 ---
 
+## 🚀 Performance & Token Optimization
+
+### 3. Optimize channels_list Token Usage
+**Priority: High** | **Status: Not Implemented**
+
+**Problem**: The `channels_list` tool is inefficient with tokens, always returning full topic/purpose fields that can be hundreds of characters each, even when not needed.
+
+**Current State**:
+- ❌ Always returns all fields (id, name, topic, purpose, memberCount)
+- ❌ Topic/purpose fields often contain hundreds of characters
+- ❌ No way to select specific fields
+- ❌ Cursor injected into last CSV row (breaks structure)
+
+**Impact**:
+- Uses 70-80% more tokens than necessary for typical queries
+- AI clients pay for unnecessary data transfer
+- Makes the tool expensive to use repeatedly
+
+**Proposed Solution**:
+Add parameters to control output verbosity:
+
+```go
+s.AddTool(mcp.NewTool("channels_list",
+    // ... existing parameters ...
+    mcp.WithString("fields",
+        mcp.DefaultString("id,name"),
+        mcp.Description("Comma-separated list of fields to return. Options: 'id', 'name', 'topic', 'purpose', 'member_count'. Use 'all' for backward compatibility.")),
+    mcp.WithNumber("min_members",
+        mcp.DefaultNumber(0),
+        mcp.Description("Only return channels with at least this many members")),
+), channelsHandler.ChannelsHandler)
+```
+
+**Implementation Notes**:
+- Default `fields="id,name"` reduces tokens by ~80%
+- `min_members` filters out abandoned/test channels
+- Move cursor to response metadata instead of CSV body
+- Keep CSV format (more efficient than JSON for tabular data)
+- Maintain backward compatibility with `fields="all"`
+
+**Expected Benefits**:
+- 70-80% reduction in token usage for typical queries
+- Faster response times
+- Lower costs for AI clients
+- Cleaner CSV structure without cursor injection
+
+---
+
 ## 🔧 Potential Enhancements
 
-### 3. Better Error Handling for Missing Cache
+### 4. Better Error Handling for Missing Cache
 **Priority: Medium** | **Status: Partial**
 
 **Problem**: When caches are missing, tools fail with generic errors instead of helpful guidance.
@@ -115,7 +163,7 @@ s.AddTool(mcp.NewTool("emoji_list",
 - Provide clear instructions on how to resolve cache issues
 - Add health check endpoints for cache status
 
-### 4. Cache Refresh Tools
+### 5. Cache Refresh Tools
 **Priority: Medium** | **Status: Not Implemented**
 
 **Problem**: No way to manually refresh caches without restarting the server.
@@ -125,7 +173,7 @@ s.AddTool(mcp.NewTool("emoji_list",
 - Add `cache_refresh_channels` tool
 - Add cache status monitoring
 
-### 5. Enhanced Search Capabilities
+### 6. Enhanced Search Capabilities
 **Priority: Low** | **Status: Partial**
 
 **Problem**: Search could be more powerful with additional filters.
