@@ -223,6 +223,7 @@ func (c *MCPSlackClient) GetConversationsContext(ctx context.Context, params *sl
 							IsOrgShared:        ec.IsOrgShared,
 							IsPendingExtShared: ec.IsPendingExtShared,
 							NumMembers:         ec.NumMembers,
+							User:               ec.User,
 						},
 						Name:       ec.Name,
 						IsArchived: ec.IsArchived,
@@ -634,16 +635,10 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 	var res []Channel
 	for _, t := range channelTypes {
 		for _, channel := range ap.channels {
-			if t == "public_channel" && !channel.IsPrivate {
-				res = append(res, channel)
-			}
-			if t == "private_channel" && channel.IsPrivate {
-				res = append(res, channel)
-			}
-			if t == "im" && channel.IsIM {
-				res = append(res, channel)
-			}
-			if t == "mpim" && channel.IsMpIM {
+			if (t == "public_channel" && !channel.IsPrivate && !channel.IsIM && !channel.IsMpIM) ||
+				(t == "private_channel" && channel.IsPrivate && !channel.IsIM && !channel.IsMpIM) ||
+				(t == "im" && channel.IsIM) ||
+				(t == "mpim" && channel.IsMpIM) {
 				res = append(res, channel)
 			}
 		}
