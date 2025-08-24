@@ -223,7 +223,7 @@ func (ch *ConversationsHandler) parseReactionParams(req mcp.CallToolRequest) (*r
 
 // Check if reactions are allowed for a channel
 func (ch *ConversationsHandler) isReactionAllowed(channelID string) bool {
-    config := os.Getenv("SLACK_MCP_REACTION_TOOLS")
+    config := os.Getenv("SLACK_MCP_ADD_REACTION_TOOL")
     // Default to disabled for safety (different from isChannelAllowed)
     if config == "" {
         return false
@@ -264,7 +264,7 @@ func (ch *ConversationsHandler) ConversationsAddReactionHandler(ctx context.Cont
 
     // Check if reactions are enabled
     if !ch.isReactionAllowed(params.channelID) {
-        return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_REACTION_TOOLS environment variable to enable.")
+        return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable.")
     }
 
     // Create Slack item reference
@@ -326,7 +326,7 @@ func (ch *ConversationsHandler) ConversationsRemoveReactionHandler(ctx context.C
 
     // Check if reactions are enabled
     if !ch.isReactionAllowed(params.channelID) {
-        return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_REACTION_TOOLS environment variable to enable.")
+        return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable.")
     }
 
     // Create Slack item reference
@@ -420,9 +420,9 @@ s.AddTool(mcp.NewTool("conversations_remove_reaction",
 Add after the existing `SLACK_MCP_ADD_MESSAGE_TOOL` validation (around line 40):
 ```go
 // Validate reaction tools configuration
-err = validateToolConfig(os.Getenv("SLACK_MCP_REACTION_TOOLS"))
+err = validateToolConfig(os.Getenv("SLACK_MCP_ADD_REACTION_TOOL"))
 if err != nil {
-    logger.Fatal("error in SLACK_MCP_REACTION_TOOLS",
+    logger.Fatal("error in SLACK_MCP_ADD_REACTION_TOOL",
         zap.String("context", "console"),
         zap.Error(err),
     )
@@ -503,9 +503,9 @@ func TestUnitParseReactionParams(t *testing.T) {
 
 ```bash
 # ALL authentication types require the feature flag for safety
-export SLACK_MCP_REACTION_TOOLS=true  # Enable for all channels
-export SLACK_MCP_REACTION_TOOLS=C123,D456  # Enable only for specific channels
-export SLACK_MCP_REACTION_TOOLS=!C123  # Enable for all except specific channels
+export SLACK_MCP_ADD_REACTION_TOOL=true  # Enable for all channels
+export SLACK_MCP_ADD_REACTION_TOOL=C123,D456  # Enable only for specific channels
+export SLACK_MCP_ADD_REACTION_TOOL=!C123  # Enable for all except specific channels
 
 # Default (when not set): Reactions are DISABLED
 ```
@@ -641,7 +641,7 @@ The implementation uses token-type-based routing (different from `GetConversatio
 ### Browser API Integration
 The edge client implementation uses the discovered web client APIs:
 - `reactions.add` endpoint for adding reactions
-- `reactions.remove` endpoint for removing reactions
+- `reactions.remove` for removing reactions
 - Same parameter structure as official Slack API
 
 ---
