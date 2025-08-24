@@ -68,6 +68,10 @@ type SlackAPI interface {
 
 	// Edge API methods
 	ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error)
+
+	// Reactions
+	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 }
 
 type MCPSlackClient struct {
@@ -254,6 +258,22 @@ func (c *MCPSlackClient) SearchContext(ctx context.Context, query string, params
 
 func (c *MCPSlackClient) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
 	return c.slackClient.PostMessageContext(ctx, channelID, options...)
+}
+
+func (c *MCPSlackClient) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	// Route by token type
+	if c.isOAuth {
+		return c.slackClient.AddReactionContext(ctx, name, item)
+	}
+	return c.edgeClient.AddReactionContext(ctx, name, item)
+}
+
+func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	// Route by token type
+	if c.isOAuth {
+		return c.slackClient.RemoveReactionContext(ctx, name, item)
+	}
+	return c.edgeClient.RemoveReactionContext(ctx, name, item)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {

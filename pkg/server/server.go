@@ -93,6 +93,34 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ConversationsAddMessageHandler)
 
+	// Add reaction tool
+	s.AddTool(mcp.NewTool("conversations_add_reaction",
+		mcp.WithDescription("Add an emoji reaction to a message"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("emoji",
+			mcp.Required(),
+			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
+	), conversationsHandler.ConversationsAddReactionHandler)
+
+	// Remove reaction tool
+	s.AddTool(mcp.NewTool("conversations_remove_reaction",
+		mcp.WithDescription("Remove an emoji reaction from a message"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("emoji",
+			mcp.Required(),
+			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
+	), conversationsHandler.ConversationsRemoveReactionHandler)
+
 	s.AddTool(mcp.NewTool("conversations_search_messages",
 		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
 		mcp.WithString("search_query",
