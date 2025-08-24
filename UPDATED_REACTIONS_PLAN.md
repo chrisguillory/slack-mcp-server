@@ -12,9 +12,9 @@ Comprehensive implementation plan for adding reaction management capabilities to
 - **Same core parameters** as official Slack API
 
 ### 2. Authentication Type Considerations
-- **OAuth Bot Mode (xoxp-)**: Uses official Slack API with scope-based permissions
-- **Browser Session Mode (xoxc/xoxd)**: Uses web client APIs with user session permissions
-- **Feature flagging needed** for browser sessions (same pattern as message posting)
+- **OAuth User Token (xoxp-)**: Uses official Slack API with scope-based permissions
+- **Browser Session Token (xoxc/xoxd)**: Uses web client APIs with user session permissions
+- **Feature flagging needed** for safety (same pattern as message posting)
 
 ## Architecture
 
@@ -122,6 +122,7 @@ func (cl *Client) RemoveReactionContext(ctx context.Context, name string, item s
 
 **File: `pkg/provider/api.go`**
 
+Add to the SlackAPI interface (around line 52-71):
 ```go
 type SlackAPI interface {
     // ... existing methods ...
@@ -130,45 +131,36 @@ type SlackAPI interface {
 }
 ```
 
-**File: `pkg/provider/mcp_slack_client.go`**
-
+Add the implementation methods to MCPSlackClient in the same file (after line 256):
 ```go
 func (c *MCPSlackClient) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
-    // Follow existing pattern: use edge client for browser sessions, official API for OAuth
-    if c.isEnterprise {
-        if c.isOAuth {
-            // Use official Slack API for OAuth bot tokens
-            return c.slackClient.AddReactionContext(ctx, name, item)
-        } else {
-            // Use edge client for browser session tokens
-            return c.edgeClient.AddReactionContext(ctx, name, item)
-        }
+    // Route by token type, not enterprise status
+    // The official Slack reactions API doesn't work with browser session tokens (xoxc/xoxd)
+    if c.isOAuth {
+        // OAuth user tokens (xoxp-) use official Slack API
+        return c.slackClient.AddReactionContext(ctx, name, item)
+    } else {
+        // Browser session tokens (xoxc/xoxd) must use edge client
+        return c.edgeClient.AddReactionContext(ctx, name, item)
     }
-    
-    // Non-enterprise: always use official API (same pattern as GetConversationsContext)
-    return c.slackClient.AddReactionContext(ctx, name, item)
 }
 
 func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
-    // Follow existing pattern: use edge client for browser sessions, official API for OAuth
-    if c.isEnterprise {
-        if c.isOAuth {
-            // Use official Slack API for OAuth bot tokens
-            return c.slackClient.RemoveReactionContext(ctx, name, item)
-        } else {
-            // Use edge client for browser session tokens
-            return c.edgeClient.RemoveReactionContext(ctx, name, item)
-        }
+    // Route by token type, not enterprise status
+    // The official Slack reactions API doesn't work with browser session tokens (xoxc/xoxd)
+    if c.isOAuth {
+        // OAuth user tokens (xoxp-) use official Slack API
+        return c.slackClient.RemoveReactionContext(ctx, name, item)
+    } else {
+        // Browser session tokens (xoxc/xoxd) must use edge client
+        return c.edgeClient.RemoveReactionContext(ctx, name, item)
     }
-    
-    // Non-enterprise: always use official API (same pattern as GetConversationsContext)
-    return c.slackClient.RemoveReactionContext(ctx, name, item)
 }
 
 
 ```
 
-**Note**: This follows the exact same routing pattern as the existing `GetConversationsContext` method: enterprise + browser session tokens use edge client, enterprise + OAuth tokens use official API, non-enterprise always uses official API.
+**Note**: Add these methods directly to the existing `MCPSlackClient` struct in `pkg/provider/api.go` (not in a separate file). Unlike `GetConversationsContext` which has special handling for `conversations.list`, reactions APIs require routing purely by token type since the official Slack reactions API doesn't support browser session tokens.
 
 ### 3. Add Handler Methods
 
@@ -207,6 +199,12 @@ func (ch *ConversationsHandler) parseReactionParams(req mcp.CallToolRequest) (*r
         return nil, errors.New("timestamp must be a string")
     }
     
+    // Validate timestamp format (must contain a dot, like 1234567890.123456)
+    if !strings.Contains(timestamp, ".") {
+        ch.logger.Error("invalid timestamp format", zap.String("timestamp", timestamp))
+        return nil, fmt.Errorf("invalid timestamp format: %s (must be like 1234567890.123456)", timestamp)
+    }
+    
     emoji := req.GetString("emoji", "")
     if emoji == "" {
         ch.logger.Error("emoji missing in add-reaction params")
@@ -225,9 +223,14 @@ func (ch *ConversationsHandler) parseReactionParams(req mcp.CallToolRequest) (*r
 
 // Check if reactions are allowed for a channel
 func (ch *ConversationsHandler) isReactionAllowed(channelID string) bool {
-    // Use same pattern as existing isChannelAllowed function
     config := os.Getenv("SLACK_MCP_REACTION_TOOLS")
-    if config == "" || config == "true" || config == "1" {
+    // Default to disabled for safety (different from isChannelAllowed)
+    if config == "" {
+        return false
+    }
+    
+    // Explicitly enabled for all channels
+    if config == "true" || config == "1" {
         return true
     }
     
@@ -246,7 +249,7 @@ func (ch *ConversationsHandler) isReactionAllowed(channelID string) bool {
             }
         }
     }
-    return !isNegated
+    return isNegated // If negated list, allow by default; if allowlist, deny by default
 }
 
 // Add reaction handler
@@ -410,7 +413,25 @@ s.AddTool(mcp.NewTool("conversations_remove_reaction",
 ), conversationsHandler.ConversationsRemoveReactionHandler)
 ```
 
-### 5. Add Tests
+### 5. Add Config Validation
+
+**File: `cmd/slack-mcp-server/main.go`**
+
+Add after the existing `SLACK_MCP_ADD_MESSAGE_TOOL` validation (around line 40):
+```go
+// Validate reaction tools configuration
+err = validateToolConfig(os.Getenv("SLACK_MCP_REACTION_TOOLS"))
+if err != nil {
+    logger.Fatal("error in SLACK_MCP_REACTION_TOOLS",
+        zap.String("context", "console"),
+        zap.Error(err),
+    )
+}
+```
+
+This reuses the existing `validateToolConfig` function that checks for invalid mixed allow/deny configurations.
+
+### 6. Add Tests
 
 **File: `pkg/handler/conversations_test.go`**
 
@@ -481,32 +502,33 @@ func TestUnitParseReactionParams(t *testing.T) {
 ### Environment Variables
 
 ```bash
-# Browser session mode (xoxc/xoxd) - REQUIRES feature flag
+# ALL authentication types require the feature flag for safety
 export SLACK_MCP_REACTION_TOOLS=true  # Enable for all channels
 export SLACK_MCP_REACTION_TOOLS=C123,D456  # Enable only for specific channels
 export SLACK_MCP_REACTION_TOOLS=!C123  # Enable for all except specific channels
 
-# OAuth bot mode (xoxp) - NO feature flag needed
-# Slack API handles permissions automatically
+# Default (when not set): Reactions are DISABLED
 ```
 
 ### Feature Flag Behavior
 
-- **OAuth Bot Mode**: No feature flag needed - Slack API enforces permissions
-- **Browser Session Mode**: Requires explicit enablement via `SLACK_MCP_REACTION_TOOLS`
-- **Same configuration pattern** as `SLACK_MCP_ADD_MESSAGE_TOOL`
+- **ALL auth types require the feature flag** - This provides consistent safety controls
+- **OAuth User Token (xoxp-)**: Feature flag required + Slack API enforces permissions
+- **Browser Session Token (xoxc/xoxd)**: Feature flag required for user safety
+- **Same configuration pattern** as `SLACK_MCP_ADD_MESSAGE_TOOL` for consistency
+- **Default behavior**: Reactions are DISABLED when flag is not set (safe by default)
 
 ## Security Considerations
 
-### OAuth Bot Mode (xoxp- tokens)
+### OAuth User Token Mode (xoxp- tokens)
 - ✅ **Slack API enforces permissions** via OAuth scopes
-- ✅ **Bot has specific, limited permissions** (`reactions:write` scope required)
-- ✅ **Workspace admins control** bot access
-- ✅ **Audit trail** of bot actions
-- ✅ **No feature flag needed** - Slack handles security
+- ✅ **User has specific permissions** (`reactions:write` scope required)
+- ✅ **Workspace admins control** user OAuth app access
+- ✅ **Audit trail** of actions
+- ✅ **Feature flag still required** for additional safety
 
-### Browser Session Mode (xoxc/xoxd tokens)
-- ✅ **Uses edge client** for enterprise workspaces
+### Browser Session Token Mode (xoxc/xoxd tokens)
+- ✅ **Uses edge client** for all cases (not just enterprise)
 - ✅ **Uses web client APIs** (reactions.add, reactions.remove)
 - ✅ **Actions appear as the user** in Slack
 - ✅ **Feature flag required** - same pattern as message posting
@@ -571,10 +593,10 @@ The `reactions` column shows the updated reaction state after the operation.
 - ✅ Can remove reactions from messages
 - ✅ Idempotent operations (no errors on duplicate add/remove)
 - ✅ Returns updated message with current reactions in CSV format
-- ✅ Works with OAuth bot tokens (xoxp-) via official Slack API
-- ✅ Works with browser session tokens (xoxc/xoxd) via edge client (enterprise only)
-- ✅ Feature flag respects channel restrictions for browser sessions
-- ✅ OAuth bots work without feature flag configuration
+- ✅ Works with OAuth user tokens (xoxp-) via official Slack API
+- ✅ Works with browser session tokens (xoxc/xoxd) via edge client
+- ✅ Feature flag respects channel restrictions for all token types
+- ✅ Feature flag required for all authentication types (safe by default)
 - ✅ Handles errors gracefully with clear messages
 - ✅ Unit tests pass
 - ✅ No regression in existing functionality
@@ -606,11 +628,11 @@ The `reactions` column shows the updated reaction state after the operation.
 ## Implementation Notes
 
 ### Routing Behavior
-The implementation follows the exact same routing pattern as existing methods like `GetConversationsContext`:
+The implementation uses token-type-based routing (different from `GetConversationsContext`):
 
-- **Enterprise + OAuth tokens (xoxp-)**: Uses official Slack API
-- **Enterprise + Browser session tokens (xoxc/xoxd)**: Uses edge client with web client APIs
-- **Non-enterprise**: Always uses official Slack API (regardless of token type)
+- **OAuth user tokens (xoxp-)**: Always use official Slack API
+- **Browser session tokens (xoxc/xoxd)**: Always use edge client with web client APIs
+- **No enterprise distinction**: Route purely by token type for reactions API
 
 ### Feature Flag Usage
 - **All auth types**: Feature flag required (same pattern as `SLACK_MCP_ADD_MESSAGE_TOOL`)
