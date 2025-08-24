@@ -722,7 +722,12 @@ func mapChannel(
 			finalTopic = ""
 		}
 	} else {
-		channelName = "#" + nameNormalized
+		// Use nameNormalized if available, otherwise fall back to name
+		displayName := nameNormalized
+		if displayName == "" {
+			displayName = name
+		}
+		channelName = "#" + displayName
 	}
 
 	return Channel{
