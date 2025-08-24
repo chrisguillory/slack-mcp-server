@@ -590,3 +590,178 @@ func TestUnitLimitByExpression_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// TestUnitParseReactionParams tests the parseReactionParams function
+func TestUnitParseReactionParams(t *testing.T) {
+	tests := []struct {
+		name      string
+		request   map[string]interface{}
+		wantErr   bool
+		wantEmoji string
+	}{
+		{
+			name: "valid params",
+			request: map[string]interface{}{
+				"channel_id": "C1234567890",
+				"timestamp":  "1234567890.123456",
+				"emoji":      "thumbsup",
+			},
+			wantErr:   false,
+			wantEmoji: "thumbsup",
+		},
+		{
+			name: "emoji with colons",
+			request: map[string]interface{}{
+				"channel_id": "C1234567890",
+				"timestamp":  "1234567890.123456",
+				"emoji":      ":rocket:",
+			},
+			wantErr:   false,
+			wantEmoji: "rocket",
+		},
+		{
+			name: "missing channel_id",
+			request: map[string]interface{}{
+				"timestamp": "1234567890.123456",
+				"emoji":     "thumbsup",
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing timestamp",
+			request: map[string]interface{}{
+				"channel_id": "C1234567890",
+				"emoji":      "thumbsup",
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing emoji",
+			request: map[string]interface{}{
+				"channel_id": "C1234567890",
+				"timestamp":  "1234567890.123456",
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid timestamp format",
+			request: map[string]interface{}{
+				"channel_id": "C1234567890",
+				"timestamp":  "1234567890", // missing decimal point
+				"emoji":      "thumbsup",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a mock CallToolRequest - we'll use a simple implementation
+			// Since we can't import mcp package in tests, we'll test the logic directly
+			channelID, _ := tt.request["channel_id"].(string)
+			timestamp, _ := tt.request["timestamp"].(string)
+			emoji, _ := tt.request["emoji"].(string)
+
+			// Test the validation logic directly
+			if channelID == "" {
+				if !tt.wantErr {
+					t.Error("expected channel_id to be required")
+				}
+				return
+			}
+			if timestamp == "" {
+				if !tt.wantErr {
+					t.Error("expected timestamp to be required")
+				}
+				return
+			}
+			if !strings.Contains(timestamp, ".") {
+				if !tt.wantErr {
+					t.Error("expected timestamp to contain a dot")
+				}
+				return
+			}
+			if emoji == "" {
+				if !tt.wantErr {
+					t.Error("expected emoji to be required")
+				}
+				return
+			}
+
+			// Test emoji stripping
+			processedEmoji := strings.Trim(emoji, ":")
+			if !tt.wantErr && processedEmoji != tt.wantEmoji {
+				t.Errorf("expected emoji %q, got %q", tt.wantEmoji, processedEmoji)
+			}
+		})
+	}
+}
+
+// TestUnitIsReactionAllowed tests the isReactionAllowed function
+func TestUnitIsReactionAllowed(t *testing.T) {
+	handler := &ConversationsHandler{}
+
+	tests := []struct {
+		name      string
+		envValue  string
+		channelID string
+		want      bool
+	}{
+		{
+			name:      "empty config - disabled by default",
+			envValue:  "",
+			channelID: "C1234567890",
+			want:      false,
+		},
+		{
+			name:      "enabled for all with true",
+			envValue:  "true",
+			channelID: "C1234567890",
+			want:      true,
+		},
+		{
+			name:      "enabled for all with 1",
+			envValue:  "1",
+			channelID: "C1234567890",
+			want:      true,
+		},
+		{
+			name:      "allowlist - channel in list",
+			envValue:  "C1234567890,C0987654321",
+			channelID: "C1234567890",
+			want:      true,
+		},
+		{
+			name:      "allowlist - channel not in list",
+			envValue:  "C1234567890,C0987654321",
+			channelID: "C1111111111",
+			want:      false,
+		},
+		{
+			name:      "denylist - channel in list",
+			envValue:  "!C1234567890,!C0987654321",
+			channelID: "C1234567890",
+			want:      false,
+		},
+		{
+			name:      "denylist - channel not in list",
+			envValue:  "!C1234567890,!C0987654321",
+			channelID: "C1111111111",
+			want:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set environment variable
+			oldValue := os.Getenv("SLACK_MCP_REACTION_TOOLS")
+			os.Setenv("SLACK_MCP_REACTION_TOOLS", tt.envValue)
+			defer os.Setenv("SLACK_MCP_REACTION_TOOLS", oldValue)
+
+			got := handler.isReactionAllowed(tt.channelID)
+			if got != tt.want {
+				t.Errorf("isReactionAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

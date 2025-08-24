@@ -39,6 +39,15 @@ func main() {
 		)
 	}
 
+	// Validate reaction tools configuration
+	err = validateToolConfig(os.Getenv("SLACK_MCP_ADD_REACTION_TOOL"))
+	if err != nil {
+		logger.Fatal("error in SLACK_MCP_ADD_REACTION_TOOL",
+			zap.String("context", "console"),
+			zap.Error(err),
+		)
+	}
+
 	p := provider.New(transport, logger)
 	s := server.NewMCPServer(p, logger)
 

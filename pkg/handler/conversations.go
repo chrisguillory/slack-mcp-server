@@ -1003,3 +1003,214 @@ func buildQuery(freeText []string, filters map[string][]string) string {
 	}
 	return strings.Join(out, " ")
 }
+
+// Reaction handling functions
+
+// reactionParams holds parameters for reaction operations
+type reactionParams struct {
+	channelID string
+	timestamp string
+	emoji     string
+}
+
+// parseReactionParams parses reaction parameters from the request
+func (ch *ConversationsHandler) parseReactionParams(req mcp.CallToolRequest) (*reactionParams, error) {
+	channelID := req.GetString("channel_id", "")
+	if channelID == "" {
+		ch.logger.Error("channel_id missing in reaction params")
+		return nil, errors.New("channel_id must be a string")
+	}
+
+	// Handle channel name resolution (same pattern as add message)
+	if strings.HasPrefix(channelID, "#") || strings.HasPrefix(channelID, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channelID]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channelID))
+			return nil, fmt.Errorf("channel %q not found", channelID)
+		}
+		channelID = channelsMaps.Channels[chn].ID
+	}
+
+	timestamp := req.GetString("timestamp", "")
+	if timestamp == "" {
+		ch.logger.Error("timestamp missing in reaction params")
+		return nil, errors.New("timestamp must be a string")
+	}
+
+	// Validate timestamp format (must contain a dot, like 1234567890.123456)
+	if !strings.Contains(timestamp, ".") {
+		ch.logger.Error("invalid timestamp format", zap.String("timestamp", timestamp))
+		return nil, fmt.Errorf("invalid timestamp format: %s (must be like 1234567890.123456)", timestamp)
+	}
+
+	emoji := req.GetString("emoji", "")
+	if emoji == "" {
+		ch.logger.Error("emoji missing in reaction params")
+		return nil, errors.New("emoji must be a string")
+	}
+
+	// Strip colons if present
+	emoji = strings.Trim(emoji, ":")
+
+	return &reactionParams{
+		channelID: channelID,
+		timestamp: timestamp,
+		emoji:     emoji,
+	}, nil
+}
+
+// isReactionAllowed checks if reactions are allowed for a channel
+func (ch *ConversationsHandler) isReactionAllowed(channelID string) bool {
+	config := os.Getenv("SLACK_MCP_ADD_REACTION_TOOL")
+	// Default to disabled for safety (different from isChannelAllowed)
+	if config == "" {
+		return false
+	}
+
+	// Explicitly enabled for all channels
+	if config == "true" || config == "1" {
+		return true
+	}
+
+	items := strings.Split(config, ",")
+	isNegated := strings.HasPrefix(strings.TrimSpace(items[0]), "!")
+
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if isNegated {
+			if strings.TrimPrefix(item, "!") == channelID {
+				return false
+			}
+		} else {
+			if item == channelID {
+				return true
+			}
+		}
+	}
+	return isNegated // If negated list, allow by default; if allowlist, deny by default
+}
+
+// ConversationsAddReactionHandler adds a reaction to a message
+func (ch *ConversationsHandler) ConversationsAddReactionHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ConversationsAddReactionHandler called", zap.Any("params", request.Params))
+
+	params, err := ch.parseReactionParams(request)
+	if err != nil {
+		ch.logger.Error("Failed to parse add-reaction params", zap.Error(err))
+		return nil, err
+	}
+
+	// Check if reactions are enabled
+	if !ch.isReactionAllowed(params.channelID) {
+		return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable")
+	}
+
+	// Create Slack item reference
+	item := slack.NewRefToMessage(params.channelID, params.timestamp)
+
+	ch.logger.Debug("Adding Slack reaction",
+		zap.String("channel", params.channelID),
+		zap.String("timestamp", params.timestamp),
+		zap.String("emoji", params.emoji),
+	)
+
+	// Add reaction (works with both auth types)
+	if err := ch.apiProvider.Slack().AddReactionContext(ctx, params.emoji, item); err != nil {
+		if !strings.Contains(err.Error(), "already_reacted") {
+			ch.logger.Error("Slack AddReactionContext failed", zap.Error(err))
+			return nil, err
+		}
+		// Log but continue if already reacted
+		ch.logger.Debug("Reaction already exists",
+			zap.String("emoji", params.emoji),
+			zap.String("channel", params.channelID),
+			zap.String("timestamp", params.timestamp))
+	}
+
+	// Fetch updated message to return (same pattern as add message)
+	historyParams := slack.GetConversationHistoryParameters{
+		ChannelID: params.channelID,
+		Limit:     1,
+		Oldest:    params.timestamp,
+		Latest:    params.timestamp,
+		Inclusive: true,
+	}
+
+	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
+	if err != nil {
+		ch.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
+		return nil, err
+	}
+	ch.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
+
+	if len(history.Messages) == 0 {
+		return nil, fmt.Errorf("message not found after adding reaction")
+	}
+
+	// Convert and return as CSV (same pattern as add message)
+	messages := ch.convertMessagesFromHistory(history.Messages, params.channelID, false)
+	return marshalMessagesToCSV(messages)
+}
+
+// ConversationsRemoveReactionHandler removes a reaction from a message
+func (ch *ConversationsHandler) ConversationsRemoveReactionHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ConversationsRemoveReactionHandler called", zap.Any("params", request.Params))
+
+	params, err := ch.parseReactionParams(request)
+	if err != nil {
+		ch.logger.Error("Failed to parse remove-reaction params", zap.Error(err))
+		return nil, err
+	}
+
+	// Check if reactions are enabled
+	if !ch.isReactionAllowed(params.channelID) {
+		return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable")
+	}
+
+	// Create Slack item reference
+	item := slack.NewRefToMessage(params.channelID, params.timestamp)
+
+	ch.logger.Debug("Removing Slack reaction",
+		zap.String("channel", params.channelID),
+		zap.String("timestamp", params.timestamp),
+		zap.String("emoji", params.emoji),
+	)
+
+	// Remove reaction (works with both auth types)
+	if err := ch.apiProvider.Slack().RemoveReactionContext(ctx, params.emoji, item); err != nil {
+		if !strings.Contains(err.Error(), "no_reaction") {
+			ch.logger.Error("Slack RemoveReactionContext failed", zap.Error(err))
+			return nil, err
+		}
+		// Log but continue if no reaction exists
+		ch.logger.Debug("Reaction doesn't exist",
+			zap.String("emoji", params.emoji),
+			zap.String("channel", params.channelID),
+			zap.String("timestamp", params.timestamp))
+	}
+
+	// Fetch updated message to return (same pattern as add message)
+	historyParams := slack.GetConversationHistoryParameters{
+		ChannelID: params.channelID,
+		Limit:     1,
+		Oldest:    params.timestamp,
+		Latest:    params.timestamp,
+		Inclusive: true,
+	}
+
+	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
+	if err != nil {
+		ch.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
+		return nil, err
+	}
+	ch.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
+
+	if len(history.Messages) == 0 {
+		return nil, fmt.Errorf("message not found after removing reaction")
+	}
+
+	// Convert and return as CSV (same pattern as add message)
+	messages := ch.convertMessagesFromHistory(history.Messages, params.channelID, false)
+	return marshalMessagesToCSV(messages)
+}

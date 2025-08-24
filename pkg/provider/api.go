@@ -68,6 +68,10 @@ type SlackAPI interface {
 
 	// Edge API methods
 	ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error)
+
+	// Reaction management methods
+	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 }
 
 type MCPSlackClient struct {
@@ -258,6 +262,30 @@ func (c *MCPSlackClient) PostMessageContext(ctx context.Context, channelID strin
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {
 	return c.edgeClient.ClientUserBoot(ctx)
+}
+
+func (c *MCPSlackClient) AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	// Route by token type, not enterprise status
+	// The official Slack reactions API doesn't work with browser session tokens (xoxc/xoxd)
+	if c.isOAuth {
+		// OAuth user tokens (xoxp-) use official Slack API
+		return c.slackClient.AddReactionContext(ctx, name, item)
+	} else {
+		// Browser session tokens (xoxc/xoxd) must use edge client
+		return c.edgeClient.AddReactionContext(ctx, name, item)
+	}
+}
+
+func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error {
+	// Route by token type, not enterprise status
+	// The official Slack reactions API doesn't work with browser session tokens (xoxc/xoxd)
+	if c.isOAuth {
+		// OAuth user tokens (xoxp-) use official Slack API
+		return c.slackClient.RemoveReactionContext(ctx, name, item)
+	} else {
+		// Browser session tokens (xoxc/xoxd) must use edge client
+		return c.edgeClient.RemoveReactionContext(ctx, name, item)
+	}
 }
 
 func (c *MCPSlackClient) IsEnterprise() bool {

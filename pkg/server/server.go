@@ -135,6 +135,34 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ConversationsSearchHandler)
 
+	// Add reaction tool
+	s.AddTool(mcp.NewTool("conversations_add_reaction",
+		mcp.WithDescription("Add an emoji reaction to a message"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("emoji",
+			mcp.Required(),
+			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
+	), conversationsHandler.ConversationsAddReactionHandler)
+
+	// Remove reaction tool
+	s.AddTool(mcp.NewTool("conversations_remove_reaction",
+		mcp.WithDescription("Remove an emoji reaction from a message"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("emoji",
+			mcp.Required(),
+			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
+	), conversationsHandler.ConversationsRemoveReactionHandler)
+
 	channelsHandler := handler.NewChannelsHandler(provider, logger)
 
 	s.AddTool(mcp.NewTool("channels_list",

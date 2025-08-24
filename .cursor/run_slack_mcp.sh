@@ -31,7 +31,11 @@ fi
 
 # Optional: Set additional environment variables if they exist
 if [ -n "${SLACK_MCP_ADD_MESSAGE_TOOL:-}" ]; then
-    export SLACK_MCP_ADD_MESSAGE_TOOL
+	export SLACK_MCP_ADD_MESSAGE_TOOL
+fi
+
+if [ -n "${SLACK_MCP_ADD_REACTION_TOOL:-}" ]; then
+	export SLACK_MCP_ADD_REACTION_TOOL
 fi
 
 if [ -n "${SLACK_MCP_LOG_LEVEL:-}" ]; then
