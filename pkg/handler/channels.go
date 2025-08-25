@@ -113,6 +113,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 		return nil, err
 	}
 
+	query := request.GetString("query", "")
 	sortType := request.GetString("sort", "popularity")
 	types := request.GetString("channel_types", provider.PubChanType)
 	cursor := request.GetString("cursor", "")
@@ -128,6 +129,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	)
 
 	ch.logger.Debug("Request parameters",
+		zap.String("query", query),
 		zap.String("sort", sortType),
 		zap.String("channel_types", types),
 		zap.String("cursor", cursor),
@@ -191,6 +193,29 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 
 	allChannels := ch.apiProvider.ProvideChannelsMaps().Channels
 	ch.logger.Debug("Total channels available", zap.Int("count", len(allChannels)))
+
+	// Apply search query if provided
+	if query != "" {
+		searchResults := make(map[string]provider.Channel)
+		queryLower := strings.ToLower(query)
+		
+		for id, channel := range allChannels {
+			// Search in channel name, topic, and purpose (case-insensitive)
+			if strings.Contains(strings.ToLower(channel.Name), queryLower) ||
+				strings.Contains(strings.ToLower(channel.Topic), queryLower) ||
+				strings.Contains(strings.ToLower(channel.Purpose), queryLower) {
+				searchResults[id] = channel
+			}
+		}
+		
+		ch.logger.Debug("Search results", 
+			zap.String("query", query),
+			zap.Int("matches", len(searchResults)),
+		)
+		
+		// Use search results as the base for further filtering
+		allChannels = searchResults
+	}
 
 	channels := filterChannelsByTypes(allChannels, channelTypes)
 	ch.logger.Debug("Channels after filtering by type", zap.Int("count", len(channels)))

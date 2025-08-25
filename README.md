@@ -75,8 +75,9 @@ Search messages in a public channel, private channel, or direct message (DM, or 
   - `limit` (number, default: 20): The maximum number of items to return. Must be an integer between 1 and 100.
 
 ### 5. channels_list:
-Get list of channels with optimized field selection for token efficiency
+Get list of channels with search, filtering, and optimized field selection for token efficiency
 - **Parameters:**
+  - `query` (string, optional): Search for channels by name. Searches in channel name, topic, and purpose (case-insensitive)
   - `channel_types` (string, required): Comma-separated channel types. Allowed values: `mpim`, `im`, `public_channel`, `private_channel`. Example: `public_channel,private_channel,im`
   - `fields` (string, default: "id,name"): Comma-separated list of fields to return. Options: `id`, `name`, `topic`, `purpose`, `member_count`. Use `all` for all fields (backward compatibility). Default: `id,name`
   - `min_members` (number, default: 0): Only return channels with at least this many members. Use to filter out abandoned/test channels. Default: 0 (no filtering)
@@ -89,7 +90,23 @@ Get list of channels with optimized field selection for token efficiency
   - `# Returned in this page: Y` - Number of channels in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 6. conversations_add_reaction:
+### 6. users_list:
+Get list of users in the workspace with flexible filtering, search, and field selection
+- **Parameters:**
+  - `query` (string, optional): Search for users by name. Searches in username, real name, and display name (case-insensitive)
+  - `filter` (string, default: "all"): Filter users by status: `all`, `active`, `deleted`, `bots`, `humans`, `admins`. Default: `all`
+  - `fields` (string, default: "id,name,real_name,status"): Comma-separated list of fields to return. Options: `id`, `name`, `real_name`, `email`, `status`, `is_bot`, `is_admin`, `time_zone`, `title`, `phone`. Use `all` for all fields. Default: `id,name,real_name,status`
+  - `include_deleted` (boolean, default: false): Include deleted/deactivated users in results. Default: false
+  - `include_bots` (boolean, default: true): Include bot users in results. Default: true
+  - `limit` (number, default: 1000): The maximum number of items to return. Must be an integer between 1 and 1000. Default: 1000
+  - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
+- **Response Format:**
+  The response includes metadata comments at the beginning:
+  - `# Total users: X` - Total number of users matching the filter criteria
+  - `# Returned in this page: Y` - Number of users in this response
+  - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
+
+### 7. conversations_add_reaction:
 Add an emoji reaction to a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
@@ -165,11 +182,11 @@ Fetches a CSV directory of all users in the workspace.
 
 ### Limitations matrix & Cache
 
-| Users Cache        | Channels Cache     | Limitations                                                                                                                                                                                                                                                                                                                  |
-|--------------------|--------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| :x:                | :x:                | No cache, No LLM context enhancement with user data, tool `channels_list` will be fully not functional. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `@userHandle` or `#channel-name`, getting messages by `@userHandle` or `#channel-name` won't be available either. |
-| :white_check_mark: | :x:                | No channels cache, tool `channels_list` will be fully not functional. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `@userHandle` or `#channel-name`, getting messages by `@userHandle` or `#channel-name` won't be available either.                                   |
-| :white_check_mark: | :white_check_mark: | No limitations, fully functional Slack MCP Server.                                                                                                                                                                                                                                                                           |
+| Users Cache        | Channels Cache     | Limitations                                                                                                                                                                                                                                                                                                                                        |
+|--------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| :x:                | :x:                | No cache, No LLM context enhancement with user data, tools `channels_list` and `users_list` will be fully not functional. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `@userHandle` or `#channel-name`, getting messages by `@userHandle` or `#channel-name` won't be available either. |
+| :white_check_mark: | :x:                | No channels cache, tool `channels_list` will be fully not functional. Tool `users_list` will work. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `#channel-name`, getting messages by `#channel-name` won't be available either.                                                          |
+| :white_check_mark: | :white_check_mark: | No limitations, fully functional Slack MCP Server with all tools operational.                                                                                                                                                                                                                                                                      |
 
 ### Debugging Tools
 
