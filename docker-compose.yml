@@ -9,6 +9,7 @@ services:
     volumes:
       - users_cache:/app/mcp-server/.users_cache.json
       - channels_cache:/app/mcp-server/.channels_cache.json
+      - emojis_cache:/app/mcp-server/.emojis_cache.json
     env_file:
       - .env
     environment:
@@ -18,6 +19,7 @@ services:
 volumes:
   users_cache:
   channels_cache:
+  emojis_cache:
 
 networks:
   app-tier:

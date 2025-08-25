@@ -32,6 +32,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	)
 
 	conversationsHandler := handler.NewConversationsHandler(provider, logger)
+	emojiHandler := handler.NewEmojiHandler(provider, logger)
 
 	s.AddTool(mcp.NewTool("conversations_history",
 		mcp.WithDescription("Get messages from the channel (or DM) by channel_id, the last row/column in the response is used as 'cursor' parameter for pagination if not empty"),
@@ -225,6 +226,24 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Cursor for pagination. Use the cursor value returned from the previous request."),
 		),
 	), usersHandler.UsersHandler)
+
+	s.AddTool(mcp.NewTool("emoji_list",
+		mcp.WithDescription("Get list of available emojis/reactions in the workspace"),
+		mcp.WithString("query",
+			mcp.Description("Search for emojis by name (case-insensitive)"),
+		),
+		mcp.WithString("type",
+			mcp.DefaultString("all"),
+			mcp.Description("Filter by emoji type: 'all', 'custom', 'unicode'. Default: 'all'"),
+		),
+		mcp.WithNumber("limit",
+			mcp.DefaultNumber(1000),
+			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 1000. Default: 1000"),
+		),
+		mcp.WithString("cursor",
+			mcp.Description("Cursor for pagination. Use the cursor value returned from the previous request."),
+		),
+	), emojiHandler.EmojiListHandler)
 
 	logger.Info("Authenticating with Slack API...",
 		zap.String("context", "console"),

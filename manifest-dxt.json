@@ -34,7 +34,8 @@
         "SLACK_MCP_USER_AGENT": "${user_config.user_agent}",
         "SLACK_MCP_ADD_MESSAGE_TOOL": "${user_config.add_message_tool}",
         "SLACK_MCP_USERS_CACHE": "${HOME}/.users_cache.json",
-        "SLACK_MCP_CHANNELS_CACHE": "${HOME}/.channels_cache.json"
+        "SLACK_MCP_CHANNELS_CACHE": "${HOME}/.channels_cache.json",
+        "SLACK_MCP_EMOJIS_CACHE": "${HOME}/.emojis_cache.json"
       }
     }
   },

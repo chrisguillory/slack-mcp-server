@@ -123,7 +123,7 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 	if query != "" {
 		searchResults = make(map[string]slack.User)
 		queryLower := strings.ToLower(query)
-		
+
 		for id, user := range allUsers {
 			// Search in username, real name, and display name (case-insensitive)
 			if strings.Contains(strings.ToLower(user.Name), queryLower) ||
@@ -133,12 +133,12 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 				searchResults[id] = user
 			}
 		}
-		
-		uh.logger.Debug("Search results", 
+
+		uh.logger.Debug("Search results",
 			zap.String("query", query),
 			zap.Int("matches", len(searchResults)),
 		)
-		
+
 		// Use search results as the base for further filtering
 		allUsers = searchResults
 	}

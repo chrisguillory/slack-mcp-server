@@ -19,6 +19,7 @@ import (
 
 const usersNotReadyMsg = "users cache is not ready yet, sync process is still running... please wait"
 const channelsNotReadyMsg = "channels cache is not ready yet, sync process is still running... please wait"
+const emojisNotReadyMsg = "emojis cache is not ready yet, sync process is still running... please wait"
 const defaultUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 var AllChanTypes = []string{"mpim", "im", "public_channel", "private_channel"}
@@ -27,6 +28,7 @@ var PubChanType = "public_channel"
 
 var ErrUsersNotReady = errors.New(usersNotReadyMsg)
 var ErrChannelsNotReady = errors.New(channelsNotReadyMsg)
+var ErrEmojisNotReady = errors.New(emojisNotReadyMsg)
 
 type UsersCache struct {
 	Users    map[string]slack.User `json:"users"`
@@ -36,6 +38,19 @@ type UsersCache struct {
 type ChannelsCache struct {
 	Channels    map[string]Channel `json:"channels"`
 	ChannelsInv map[string]string  `json:"channels_inv"`
+}
+
+type EmojiCache struct {
+	Emojis map[string]Emoji `json:"emojis"`
+}
+
+type Emoji struct {
+	Name     string   `json:"name"`
+	URL      string   `json:"url"`
+	IsCustom bool     `json:"is_custom"`
+	Aliases  []string `json:"aliases"`
+	TeamID   string   `json:"team_id"`
+	UserID   string   `json:"user_id"`
 }
 
 type Channel struct {
@@ -102,6 +117,10 @@ type ApiProvider struct {
 	channelsInv   map[string]string
 	channelsCache string
 	channelsReady bool
+
+	emojis      map[string]Emoji
+	emojisCache string
+	emojisReady bool
 }
 
 func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlackClient, error) {
@@ -351,6 +370,11 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		channelsCache = ".channels_cache.json"
 	}
 
+	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
+	if emojisCache == "" {
+		emojisCache = ".emojis_cache.json"
+	}
+
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
 		logger.Info("Demo credentials are set, skip.")
 	} else {
@@ -374,6 +398,9 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		channels:      make(map[string]Channel),
 		channelsInv:   map[string]string{},
 		channelsCache: channelsCache,
+
+		emojis:      make(map[string]Emoji),
+		emojisCache: emojisCache,
 	}
 }
 
@@ -393,6 +420,11 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		channelsCache = ".channels_cache_v2.json"
 	}
 
+	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
+	if emojisCache == "" {
+		emojisCache = ".emojis_cache.json"
+	}
+
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
 		logger.Info("Demo credentials are set, skip.")
 	} else {
@@ -416,6 +448,9 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		channels:      make(map[string]Channel),
 		channelsInv:   map[string]string{},
 		channelsCache: channelsCache,
+
+		emojis:      make(map[string]Emoji),
+		emojisCache: emojisCache,
 	}
 }
 
@@ -492,6 +527,141 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 	ap.usersReady = true
 
 	return nil
+}
+
+func (ap *ApiProvider) RefreshEmojis(ctx context.Context) error {
+	// Try loading from cache first
+	if data, err := ioutil.ReadFile(ap.emojisCache); err == nil {
+		var cachedEmojis []Emoji
+		if err := json.Unmarshal(data, &cachedEmojis); err != nil {
+			ap.logger.Warn("Failed to unmarshal emojis cache, will refetch",
+				zap.String("cache_file", ap.emojisCache),
+				zap.Error(err))
+		} else {
+			for _, e := range cachedEmojis {
+				ap.emojis[e.Name] = e
+			}
+			ap.logger.Info("Loaded emojis from cache",
+				zap.Int("count", len(cachedEmojis)),
+				zap.String("cache_file", ap.emojisCache))
+			ap.emojisReady = true
+			return nil
+		}
+	}
+
+	// Handle demo mode or nil client
+	if ap.client == nil {
+		ap.logger.Info("Client is nil (demo mode), using default emojis only")
+		// Just add the common unicode emojis and mark as ready
+		ap.addCommonUnicodeEmojis()
+		ap.emojisReady = true
+		return nil
+	}
+
+	// Fetch emojis from Slack API
+	// Note: Since we can't access Raw() method on SlackAPI interface,
+	// we'll use a type assertion to access the MCPSlackClient
+	mcpClient, ok := ap.client.(*MCPSlackClient)
+	if !ok {
+		ap.logger.Error("Failed to cast client to MCPSlackClient")
+		return errors.New("failed to access emoji API")
+	}
+
+	emojis, err := mcpClient.Raw().Slack.GetEmojiContext(ctx)
+	if err != nil {
+		ap.logger.Error("Failed to fetch emojis", zap.Error(err))
+		return err
+	}
+
+	// Convert to our internal format
+	var emojiList []Emoji
+	for name, url := range emojis {
+		// Check if it's an alias (starts with "alias:")
+		isAlias := strings.HasPrefix(url, "alias:")
+		if !isAlias {
+			emoji := Emoji{
+				Name:     name,
+				URL:      url,
+				IsCustom: true, // All returned emojis from API are custom
+				Aliases:  []string{},
+				TeamID:   mcpClient.AuthResponse().TeamID,
+				UserID:   "", // We don't have user info from this API
+			}
+			ap.emojis[name] = emoji
+			emojiList = append(emojiList, emoji)
+		}
+	}
+
+	// Also add standard Unicode emojis
+	ap.addCommonUnicodeEmojis()
+
+	// Collect all emojis for saving to cache
+	for _, emoji := range ap.emojis {
+		if emoji.IsCustom {
+			continue // Already added custom emojis to emojiList
+		}
+		emojiList = append(emojiList, emoji)
+	}
+
+	// Save to cache
+	if data, err := json.MarshalIndent(emojiList, "", "  "); err != nil {
+		ap.logger.Error("Failed to marshal emojis for cache", zap.Error(err))
+	} else {
+		if err := ioutil.WriteFile(ap.emojisCache, data, 0644); err != nil {
+			ap.logger.Error("Failed to write cache file",
+				zap.String("cache_file", ap.emojisCache),
+				zap.Error(err))
+		} else {
+			ap.logger.Info("Wrote emojis to cache",
+				zap.Int("count", len(emojiList)),
+				zap.String("cache_file", ap.emojisCache))
+		}
+	}
+
+	ap.emojisReady = true
+	return nil
+}
+
+func (ap *ApiProvider) addCommonUnicodeEmojis() {
+	// Standard Unicode emojis (a subset of common ones)
+	// These are not returned by the API but are always available
+	commonUnicodeEmojis := map[string]string{
+		"thumbsup":         "👍",
+		"thumbsdown":       "👎",
+		"heart":            "❤️",
+		"smile":            "😊",
+		"laughing":         "😂",
+		"cry":              "😢",
+		"angry":            "😠",
+		"clap":             "👏",
+		"fire":             "🔥",
+		"eyes":             "👀",
+		"rocket":           "🚀",
+		"100":              "💯",
+		"pray":             "🙏",
+		"tada":             "🎉",
+		"white_check_mark": "✅",
+		"x":                "❌",
+		"warning":          "⚠️",
+		"question":         "❓",
+		"exclamation":      "❗",
+		"heavy_plus_sign":  "+1",
+		"heavy_minus_sign": "-1",
+	}
+
+	for name, unicode := range commonUnicodeEmojis {
+		if _, exists := ap.emojis[name]; !exists {
+			emoji := Emoji{
+				Name:     name,
+				URL:      unicode, // Store the unicode character as URL for unicode emojis
+				IsCustom: false,
+				Aliases:  []string{},
+				TeamID:   "",
+				UserID:   "",
+			}
+			ap.emojis[name] = emoji
+		}
+	}
 }
 
 func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
@@ -661,12 +831,28 @@ func (ap *ApiProvider) ProvideChannelsMaps() *ChannelsCache {
 	}
 }
 
+func (ap *ApiProvider) ProvideEmojiMap() *EmojiCache {
+	return &EmojiCache{
+		Emojis: ap.emojis,
+	}
+}
+
 func (ap *ApiProvider) IsReady() (bool, error) {
 	if !ap.usersReady {
 		return false, ErrUsersNotReady
 	}
 	if !ap.channelsReady {
 		return false, ErrChannelsNotReady
+	}
+	// Note: We don't check emojisReady here because emojis are optional
+	// and shouldn't block other operations. The emoji handler will check
+	// this separately if needed.
+	return true, nil
+}
+
+func (ap *ApiProvider) IsEmojisReady() (bool, error) {
+	if !ap.emojisReady {
+		return false, ErrEmojisNotReady
 	}
 	return true, nil
 }

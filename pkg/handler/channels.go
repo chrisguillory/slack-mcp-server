@@ -198,7 +198,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	if query != "" {
 		searchResults := make(map[string]provider.Channel)
 		queryLower := strings.ToLower(query)
-		
+
 		for id, channel := range allChannels {
 			// Search in channel name, topic, and purpose (case-insensitive)
 			if strings.Contains(strings.ToLower(channel.Name), queryLower) ||
@@ -207,12 +207,12 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 				searchResults[id] = channel
 			}
 		}
-		
-		ch.logger.Debug("Search results", 
+
+		ch.logger.Debug("Search results",
 			zap.String("query", query),
 			zap.Int("matches", len(searchResults)),
 		)
-		
+
 		// Use search results as the base for further filtering
 		allChannels = searchResults
 	}
@@ -401,7 +401,7 @@ func paginateChannels(channels []provider.Channel, cursor string, limit int) ([]
 			needsSort = false
 		}
 	}
-	
+
 	if needsSort {
 		sort.Slice(channels, func(i, j int) bool {
 			return channels[i].ID < channels[j].ID

@@ -17,6 +17,7 @@ services:
       # Mount cache files (read-write so they can be updated)
       - ./.users_cache.json:/app/.users_cache.json
       - ./.channels_cache_v2.json:/app/.channels_cache_v2.json
+      - ./.emojis_cache.json:/app/.emojis_cache.json
       # Mount go mod cache for faster builds
       - go-mod-cache:/go/pkg/mod
     environment:

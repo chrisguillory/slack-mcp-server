@@ -56,6 +56,7 @@ func main() {
 
 		newUsersWatcher(p, &once, logger)()
 		newChannelsWatcher(p, &once, logger)()
+		newEmojiWatcher(p, &once, logger)()
 	}()
 
 	switch transport {
@@ -151,6 +152,38 @@ func newChannelsWatcher(p *provider.ApiProvider, once *sync.Once, logger *zap.Lo
 		}
 
 		err := p.RefreshChannels(context.Background())
+		if err != nil {
+			logger.Fatal("Error booting provider",
+				zap.String("context", "console"),
+				zap.Error(err),
+			)
+		}
+
+		ready, _ := p.IsReady()
+		if ready {
+			once.Do(func() {
+				logger.Info("Slack MCP Server is fully ready.",
+					zap.String("context", "console"),
+				)
+			})
+		}
+	}
+}
+
+func newEmojiWatcher(p *provider.ApiProvider, once *sync.Once, logger *zap.Logger) func() {
+	return func() {
+		logger.Info("Caching emojis collection...",
+			zap.String("context", "console"),
+		)
+
+		if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
+			logger.Info("Demo credentials are set, skip.",
+				zap.String("context", "console"),
+			)
+			return
+		}
+
+		err := p.RefreshEmojis(context.Background())
 		if err != nil {
 			logger.Fatal("Error booting provider",
 				zap.String("context", "console"),
