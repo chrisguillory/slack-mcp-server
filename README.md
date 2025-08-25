@@ -14,7 +14,7 @@ This feature-rich Slack MCP Server has:
 - **Channel and Thread Support with `#Name` `@Lookup`**: Fetch messages from channels and threads, including activity messages, and retrieve channels using their names (e.g., #general) as well as their IDs.
 - **Smart History**: Fetch messages with pagination by date (d1, 7d, 1m) or message count.
 - **Search Messages**: Search messages in channels, threads, and DMs using various filters like date, user, and content.
-- **Safe Message Posting**: The `conversations_add_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
+- **Safe Message Posting**: The `chat_post_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
 - **DM and Group DM support**: Retrieve direct messages and group direct messages.
 - **Embedded user information**: Embed user information in messages, for better context.
 - **Cache support**: Cache users and channels for faster access.
@@ -47,8 +47,8 @@ Get a thread of messages posted to a conversation by channelID and `thread_ts`, 
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
   - `limit` (string, default: "1d"): Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided.
 
-### 3. conversations_add_message
-Add a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts.
+### 3. chat_post_message
+Post a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts.
 
 > **Note:** Posting messages is disabled by default for safety. To enable, set the `SLACK_MCP_ADD_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, posting is enabled only for those specific channels. See the Environment Variables section below for details.
 
@@ -58,7 +58,7 @@ Add a message to a public channel, private channel, or direct message (DM, or IM
   - `payload` (string, required): Message payload in specified content_type format. Example: 'Hello, world!' for text/plain or '# Hello, world!' for text/markdown.
   - `content_type` (string, default: "text/markdown"): Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'.
 
-### 4. conversations_search_messages
+### 4. search_messages
 Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required.
 - **Parameters:**
   - `search_query` (string, optional): Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored.
@@ -106,14 +106,14 @@ Get list of users in the workspace with flexible filtering, search, and field se
   - `# Returned in this page: Y` - Number of users in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 7. conversations_add_reaction:
+### 7. reactions_add:
 Add an emoji reaction to a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
-### 7. conversations_remove_reaction:
+### 8. reactions_remove:
 Remove an emoji reaction from a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
@@ -170,9 +170,9 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA`             | No        | `nil`                     | Path to CA certificate                                                                                                                                                                                                                                                                    |
 | `SLACK_MCP_SERVER_CA_TOOLKIT`     | No        | `nil`                     | Inject HTTPToolkit CA certificate to root trust-store for MitM debugging                                                                                                                                                                                                                  |
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
-| `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `conversations_add_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
-| `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `conversations_add_reaction` and `conversations_remove_reaction` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
-| `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `conversations_add_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
+| `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `chat_post_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
+| `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `reactions_add` and `reactions_remove` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `chat_post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `.channels_cache_v2.json` | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup.                                                                                                                                                                          |

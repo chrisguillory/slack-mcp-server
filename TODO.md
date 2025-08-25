@@ -1,94 +1,33 @@
-# TODO: Slack MCP Server Improvements
+# Slack MCP Server - TODO
 
-This file tracks planned improvements, missing features, and enhancements for the Slack MCP Server repository.
+## 🔄 Tool Renames (Align with Slack API)
 
-## 🚨 Missing Core Functionality
+### Priority: HIGH - Fix naming inconsistencies
+These tools should be renamed to match Slack's official API naming conventions for clarity and maintainability:
 
-*(Currently empty - all core functionality has been implemented!)*
+**Message Operations (currently under conversations_, should be chat_):**
+- [x] `conversations_add_message` → `chat_post_message` (currently wraps chat.postMessage API)
+- [x] `conversations_search_messages` → `search_messages` (wraps search.messages API)
 
----
+**Reaction Operations (currently under conversations_, should be reactions_):**
+- [x] `conversations_add_reaction` → `reactions_add` (wraps reactions.add API)
+- [x] `conversations_remove_reaction` → `reactions_remove` (wraps reactions.remove API)
 
-## 🔧 Potential Enhancements
+**Keep As-Is (already correct):**
+- ✅ `conversations_history` (correctly uses conversations.history API)
+- ✅ `conversations_replies` (correctly uses conversations.replies API)
+- ✅ `channels_list` (acceptable shorthand for conversations.list)
+- ✅ `users_list` (correctly uses users.list API)
+- ✅ `emoji_list` (correctly uses emoji.list API)
 
-### 3. Better Error Handling for Missing Cache
-**Priority: Medium** | **Status: Partial**
+## 🆕 New Tools to Add
 
-**Problem**: When caches are missing, tools fail with generic errors instead of helpful guidance.
+### Message Management
+- [ ] `chat_update` - Edit/update existing messages (uses chat.update API)
+- [ ] `chat_delete` - Delete messages (uses chat.delete API)
 
-**Proposed Solution**:
-- Add specific error messages for missing cache files
-- Provide clear instructions on how to resolve cache issues
-- Add health check endpoints for cache status
+### Channel Information
+- [ ] `conversations_members` - List channel members (uses conversations.members API)
 
-### 4. Cache Refresh Tools
-**Priority: Medium** | **Status: Not Implemented**
-
-**Problem**: No way to manually refresh caches without restarting the server.
-
-**Proposed Solution**:
-- Add `cache_refresh_users` tool
-- Add `cache_refresh_channels` tool
-- Add cache status monitoring
-
-### 5. Enhanced Search Capabilities
-**Priority: Low** | **Status: Partial**
-
-**Problem**: Search could be more powerful with additional filters.
-
-**Proposed Solution**:
-- Add date range filtering
-- Add user mention filtering
-- Add channel-specific search
-- Add search result highlighting
-
----
-
-## 🎯 Quick Wins
-
-1. **Better Error Messages** - Improves user experience
-2. **Cache Status Endpoints** - Helps with debugging
-
----
-
-## ✅ Completed Features (Recently Implemented)
-
-### Emoji List Tool
-- ✅ Created `EmojiHandler` struct in `pkg/handler/emoji.go`
-- ✅ Implemented listing of all available emojis/reactions
-- ✅ Added filtering by type (custom, unicode, all)
-- ✅ Added search functionality with `query` parameter  
-- ✅ Added pagination with cursor support (default limit: 1000)
-- ✅ Implemented emoji caching in `.emojis_cache.json`
-- ✅ Added Docker volume mounts for cache persistence
-- ✅ Created comprehensive test suite in markdown format
-- ✅ Updated all documentation (README, docs, manifest)
-
-### Users List Tool
-- ✅ Created `UsersHandler` struct in `pkg/handler/users.go`
-- ✅ Implemented search functionality with `query` parameter
-- ✅ Added filtering by user type (active, deleted, bots, humans, admins)
-- ✅ Added field selection for token optimization
-- ✅ Added pagination with cursor support
-- ✅ Updated README.md with complete documentation
-- ✅ Created comprehensive test suite
-
-### Channels List Enhancement
-- ✅ Added `query` parameter for searching channels
-- ✅ Search works across name, topic, and purpose fields
-- ✅ Updated default limit from 100 to 1000
-- ✅ Updated test suite with search test cases
-
----
-
-## 📝 Notes
-
-- The server now has complete user and channel listing/searching capabilities
-- Implementation should follow the established patterns in the codebase
-- Consider backward compatibility when adding new tools
-- Test thoroughly with different MCP clients (Cursor IDE, etc.)
-
----
-
-*Last Updated: $(date)*
-*Repository: korotovsky/slack-mcp-server*
-*Fork: chrisguillory/slack-mcp-server*
+### User Information  
+- [ ] `users_info` - Get detailed user information (uses users.info API)

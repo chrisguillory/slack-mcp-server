@@ -76,8 +76,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ConversationsRepliesHandler)
 
-	s.AddTool(mcp.NewTool("conversations_add_message",
-		mcp.WithDescription("Add a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts."),
+	s.AddTool(mcp.NewTool("chat_post_message",
+		mcp.WithDescription("Post a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts."),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
@@ -92,10 +92,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultString("text/markdown"),
 			mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'."),
 		),
-	), conversationsHandler.ConversationsAddMessageHandler)
+	), conversationsHandler.ChatPostMessageHandler)
 
 	// Add reaction tool
-	s.AddTool(mcp.NewTool("conversations_add_reaction",
+	s.AddTool(mcp.NewTool("reactions_add",
 		mcp.WithDescription("Add an emoji reaction to a message"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
@@ -106,10 +106,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("emoji",
 			mcp.Required(),
 			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
-	), conversationsHandler.ConversationsAddReactionHandler)
+	), conversationsHandler.ReactionsAddHandler)
 
 	// Remove reaction tool
-	s.AddTool(mcp.NewTool("conversations_remove_reaction",
+	s.AddTool(mcp.NewTool("reactions_remove",
 		mcp.WithDescription("Remove an emoji reaction from a message"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
@@ -120,9 +120,9 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("emoji",
 			mcp.Required(),
 			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
-	), conversationsHandler.ConversationsRemoveReactionHandler)
+	), conversationsHandler.ReactionsRemoveHandler)
 
-	s.AddTool(mcp.NewTool("conversations_search_messages",
+	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
 		mcp.WithString("search_query",
 			mcp.Description("Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored."),
@@ -162,7 +162,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultNumber(20),
 			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 100."),
 		),
-	), conversationsHandler.ConversationsSearchHandler)
+	), conversationsHandler.SearchMessagesHandler)
 
 	channelsHandler := handler.NewChannelsHandler(provider, logger)
 

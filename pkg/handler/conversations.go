@@ -151,9 +151,9 @@ func (ch *ConversationsHandler) UsersResource(ctx context.Context, request mcp.R
 	}, nil
 }
 
-// ConversationsAddMessageHandler posts a message and returns it as CSV
-func (ch *ConversationsHandler) ConversationsAddMessageHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ch.logger.Debug("ConversationsAddMessageHandler called", zap.Any("params", request.Params))
+// ChatPostMessageHandler posts a message and returns it as CSV
+func (ch *ConversationsHandler) ChatPostMessageHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ChatPostMessageHandler called", zap.Any("params", request.Params))
 
 	params, err := ch.parseParamsToolAddMessage(request)
 	if err != nil {
@@ -327,9 +327,9 @@ func (ch *ConversationsHandler) isReactionAllowed(channelID string) bool {
 }
 
 // Add reaction handler
-func (ch *ConversationsHandler) ConversationsAddReactionHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (ch *ConversationsHandler) ReactionsAddHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if ch.logger != nil {
-		ch.logger.Debug("ConversationsAddReactionHandler called", zap.Any("params", request.Params))
+		ch.logger.Debug("ReactionsAddHandler called", zap.Any("params", request.Params))
 	}
 
 	params, err := ch.parseReactionParams(request)
@@ -403,9 +403,9 @@ func (ch *ConversationsHandler) ConversationsAddReactionHandler(ctx context.Cont
 }
 
 // Remove reaction handler
-func (ch *ConversationsHandler) ConversationsRemoveReactionHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (ch *ConversationsHandler) ReactionsRemoveHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	if ch.logger != nil {
-		ch.logger.Debug("ConversationsRemoveReactionHandler called", zap.Any("params", request.Params))
+		ch.logger.Debug("ReactionsRemoveHandler called", zap.Any("params", request.Params))
 	}
 
 	params, err := ch.parseReactionParams(request)
@@ -557,8 +557,8 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 	return marshalMessagesToCSV(messages)
 }
 
-func (ch *ConversationsHandler) ConversationsSearchHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	ch.logger.Debug("ConversationsSearchHandler called", zap.Any("params", request.Params))
+func (ch *ConversationsHandler) SearchMessagesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("SearchMessagesHandler called", zap.Any("params", request.Params))
 
 	params, err := ch.parseParamsToolSearch(request)
 	if err != nil {
@@ -790,7 +790,7 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(request mcp.CallToolRe
 	if toolConfig == "" {
 		ch.logger.Error("Add-message tool disabled by default")
 		return nil, errors.New(
-			"by default, the conversations_add_message tool is disabled to guard Slack workspaces against accidental spamming." +
+			"by default, the chat_post_message tool is disabled to guard Slack workspaces against accidental spamming." +
 				"To enable it, set the SLACK_MCP_ADD_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels" +
 				"to limit where the MCP can post messages, e.g. 'SLACK_MCP_ADD_MESSAGE_TOOL=C1234567890,D0987654321', 'SLACK_MCP_ADD_MESSAGE_TOOL=!C1234567890'" +
 				"to enable all except one or 'SLACK_MCP_ADD_MESSAGE_TOOL=true' for all channels and DMs",
@@ -813,7 +813,7 @@ func (ch *ConversationsHandler) parseParamsToolAddMessage(request mcp.CallToolRe
 	}
 	if !isChannelAllowed(channel) {
 		ch.logger.Warn("Add-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
-		return nil, fmt.Errorf("conversations_add_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
+		return nil, fmt.Errorf("chat_post_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
 	}
 
 	threadTs := request.GetString("thread_ts", "")
