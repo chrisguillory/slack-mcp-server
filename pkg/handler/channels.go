@@ -116,8 +116,8 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	sortType := request.GetString("sort", "popularity")
 	types := request.GetString("channel_types", provider.PubChanType)
 	cursor := request.GetString("cursor", "")
-	// Changed: use 100 as default instead of 0, since 0 triggers another default later
-	limit := request.GetInt("limit", 100)
+	// Changed: use 1000 as default instead of 0, since 0 triggers another default later
+	limit := request.GetInt("limit", 1000)
 	fields := request.GetString("fields", "id,name")
 	minMembers := request.GetInt("min_members", 0)
 
@@ -180,7 +180,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 
 	// Validate limit range
 	if limit <= 0 {
-		limit = 100
+		limit = 1000
 		ch.logger.Debug("Invalid or missing limit, using default", zap.Int("limit", limit))
 	} else if limit > 1000 {
 		ch.logger.Warn("Limit exceeds maximum, capping to 1000", zap.Int("requested", limit))

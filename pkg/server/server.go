@@ -183,7 +183,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel."),
 		),
 		mcp.WithNumber("limit",
-			mcp.DefaultNumber(100),
+			mcp.DefaultNumber(1000),
 			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 1000.")
 		),
 		mcp.WithString("cursor",
