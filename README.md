@@ -81,7 +81,7 @@ Get list of channels with optimized field selection for token efficiency
   - `fields` (string, default: "id,name"): Comma-separated list of fields to return. Options: `id`, `name`, `topic`, `purpose`, `member_count`. Use `all` for all fields (backward compatibility). Default: `id,name`
   - `min_members` (number, default: 0): Only return channels with at least this many members. Use to filter out abandoned/test channels. Default: 0 (no filtering)
   - `sort` (string, optional): Type of sorting. Allowed values: `popularity` - sort by number of members/participants in each channel.
-  - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 1000.
+  - `limit` (number, default: 1000): The maximum number of items to return. Must be an integer between 1 and 1000.
   - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
 - **Response Format:**
   The response includes metadata comments at the beginning:
