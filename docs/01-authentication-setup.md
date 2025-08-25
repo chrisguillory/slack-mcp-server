@@ -49,4 +49,14 @@ Instead of using browser-based tokens (`xoxc`/`xoxd`), you can use a User OAuth 
 
 > **Note**: You only need **either** XOXP token **or** both XOXC/XOXD tokens. XOXP user tokens are more secure and don't require browser session extraction.
 
+#### How Browser Session Tokens Work
+
+When configured with *browser session tokens* (**xoxc/xoxd**), the server:
+- Uses the **xoxc** token as a bearer token for authenticating Slack API requests
+- Sends the **xoxd** token as a cookie in HTTP requests
+- Accesses **all standard Slack API endpoints** (not limited to Edge API)
+- Enables full API functionality **without installing a Slack app or completing OAuth authorization**
+
+As a result, you can leverage the *full capabilities of Slack's API* much like OAuth tokens, but without creating or installing an app in your workspace.
+
 See next: [Installation](02-installation.md)

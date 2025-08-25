@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gocarina/gocsv"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -47,6 +48,19 @@ type searchParams struct {
 	page  int
 }
 
+// SearchMessage is like Message but without Cursor field (cursor is in metadata)
+type SearchMessage struct {
+	MsgID     string `json:"msgID"`
+	UserID    string `json:"userID"`
+	UserName  string `json:"userUser"`
+	RealName  string `json:"realName"`
+	Channel   string `json:"channelID"`
+	ThreadTs  string `json:"ThreadTs"`
+	Text      string `json:"text"`
+	Time      string `json:"time"`
+	Reactions string `json:"reactions,omitempty"`
+}
+
 func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	sh.logger.Debug("SearchMessagesHandler called", zap.Any("params", request.Params))
 
@@ -72,16 +86,42 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 	sh.logger.Debug("Search completed", zap.Int("matches", len(messagesRes.Matches)))
 
 	messages := sh.convertMessagesFromSearch(messagesRes.Matches)
-	if len(messages) > 0 && ((messagesRes.Pagination.PerPage * messagesRes.Pagination.PageCount) < messagesRes.Pagination.TotalCount) {
-		nextCursor := fmt.Sprintf("page:%d", messagesRes.Pagination.PageCount+1)
-		messages[len(messages)-1].Cursor = base64.StdEncoding.EncodeToString([]byte(nextCursor))
+
+	// Determine if there's a next page
+	var nextCursor string
+	// Check if current page * items per page is less than total (meaning there are more items)
+	if len(messages) > 0 && (messagesRes.Pagination.Page*messagesRes.Pagination.PerPage) < messagesRes.Pagination.TotalCount {
+		nextCursor = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("page:%d", messagesRes.Pagination.Page+1)))
 	}
-	return marshalMessagesToCSV(messages)
+
+	// Build result with metadata at the beginning (similar to channels_list and users_list)
+	csvBytes, err := marshalSearchMessagesToCSVBytes(messages)
+	if err != nil {
+		return nil, err
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("# Total messages: %d\n", messagesRes.Pagination.TotalCount))
+	result.WriteString(fmt.Sprintf("# Total pages: %d\n", messagesRes.Pagination.PageCount))
+	result.WriteString(fmt.Sprintf("# Current page: %d\n", messagesRes.Pagination.Page))
+	result.WriteString(fmt.Sprintf("# Items per page: %d\n", messagesRes.Pagination.PerPage))
+	result.WriteString(fmt.Sprintf("# Returned in this page: %d\n", len(messages)))
+	if messagesRes.Pagination.First > 0 && messagesRes.Pagination.Last > 0 {
+		result.WriteString(fmt.Sprintf("# Item range: %d-%d\n", messagesRes.Pagination.First, messagesRes.Pagination.Last))
+	}
+	if nextCursor != "" {
+		result.WriteString(fmt.Sprintf("# Next cursor: %s\n", nextCursor))
+	} else {
+		result.WriteString("# Next cursor: (none - last page)\n")
+	}
+	result.Write(csvBytes)
+
+	return mcp.NewToolResultText(result.String()), nil
 }
 
-func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchMessage) []Message {
+func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchMessage) []SearchMessage {
 	usersMap := sh.apiProvider.ProvideUsersMap()
-	var messages []Message
+	var messages []SearchMessage
 	warn := false
 
 	for _, msg := range slackMessages {
@@ -103,7 +143,7 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 
 		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments)
 
-		messages = append(messages, Message{
+		messages = append(messages, SearchMessage{
 			MsgID:     msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  userName,
@@ -472,4 +512,8 @@ func buildQuery(freeText []string, filters map[string][]string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+func marshalSearchMessagesToCSVBytes(messages []SearchMessage) ([]byte, error) {
+	return gocsv.MarshalBytes(&messages)
 }

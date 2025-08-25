@@ -31,7 +31,7 @@ type Message struct {
 	Text      string `json:"text"`
 	Time      string `json:"time"`
 	Reactions string `json:"reactions,omitempty"`
-	Cursor    string `json:"cursor"`
+	Cursor    string `json:"cursor,omitempty"`
 }
 
 type User struct {

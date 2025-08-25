@@ -3,13 +3,16 @@
 
 Model Context Protocol (MCP) server for Slack Workspaces. The most powerful MCP Slack server — supports Stdio and SSE transports, proxy settings, DMs, Group DMs, Smart History fetch (by date or count), may work via OAuth or in complete stealth mode with no permissions and scopes in Workspace 😏.
 
+> [!NOTE]
+> **Stealth Mode Technical Details**: *Browser session tokens* (**xoxc**/**xoxd**) are compatible with the **standard Slack API** in addition to the Edge API. The **xoxc token** functions as a bearer token for API authentication, while the **xoxd token** is sent as a cookie. This combination *enables full access* to Slack's standard API endpoints **without installing a Slack app or granting extra permissions**.
+
 > [!IMPORTANT]  
 > We need your support! Each month, over 30,000 engineers visit this repository, and more than 9,000 are already using it.
 > 
 > If you appreciate the work our [contributors](https://github.com/korotovsky/slack-mcp-server/graphs/contributors) have put into this project, please consider giving the repository a star.
 
 This feature-rich Slack MCP Server has:
-- **Stealth and OAuth Modes**: Run the server without requiring additional permissions or bot installations (stealth mode), or use secure OAuth tokens for access without needing to refresh or extract tokens from the browser (OAuth mode).
+- **Stealth and OAuth Modes**: Operate the server in **stealth mode** by using browser session tokens (**xoxc**/**xoxd**), which allow access to Slack's standard API **without requiring additional permissions or bot installation**; or in **OAuth mode** with secure OAuth tokens, enabling access without extracting tokens from the browser or needing token refresh.
 - **Enterprise Workspaces Support**: Possibility to integrate with Enterprise Slack setups.
 - **Channel and Thread Support with `#Name` `@Lookup`**: Fetch messages from channels and threads, including activity messages, and retrieve channels using their names (e.g., #general) as well as their IDs.
 - **Smart History**: Fetch messages with pagination by date (d1, 7d, 1m) or message count.
@@ -71,8 +74,17 @@ Search messages in a public channel, private channel, or direct message (DM, or 
   - `filter_date_on` (string, optional): Filter messages sent on a specific date in format `YYYY-MM-DD`. Example: `2023-10-01`, `July`, `Yesterday` or `Today`. If not provided, all dates will be searched.
   - `filter_date_during` (string, optional): Filter messages sent during a specific period in format `YYYY-MM-DD`. Example: `July`, `Yesterday` or `Today`. If not provided, all dates will be searched.
   - `filter_threads_only` (boolean, default: false): If true, the response will include only messages from threads. Default is boolean false.
-  - `cursor` (string, default: ""): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
-  - `limit` (number, default: 20): The maximum number of items to return. Must be an integer between 1 and 100.
+  - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
+  - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 100.
+- **Response Format:**
+  The response includes metadata comments at the beginning:
+  - `# Total messages: X` - Total number of messages matching the search criteria
+  - `# Total pages: Y` - Total number of pages available
+  - `# Current page: Z` - Current page number
+  - `# Items per page: N` - Number of items per page
+  - `# Returned in this page: M` - Number of messages in this response
+  - `# Item range: A-B` - Range of items in the current page (when available)
+  - `# Next cursor: C` - Cursor for the next page, or "(none - last page)" if no more pages
 
 ### 5. channels_list:
 Get list of channels with search, filtering, and optimized field selection for token efficiency

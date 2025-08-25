@@ -26,3 +26,7 @@ func marshalMessagesToCSV(messages []Message) (*mcp.CallToolResult, error) {
 	}
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
+
+func marshalMessagesToCSVBytes(messages []Message) ([]byte, error) {
+	return gocsv.MarshalBytes(&messages)
+}
