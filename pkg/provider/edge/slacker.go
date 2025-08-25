@@ -64,15 +64,20 @@ func (cl *Client) GetConversationsContext(ctx context.Context, _ *slack.GetConve
 	}()
 
 	// create a map of channels that we have already seen
-	var seenChannels = make(map[string]struct{})
+	var seenChannels = make(map[string]int) // map channel ID to index in channels slice
 	for r := range resultC {
 		if r.Err != nil {
 			return nil, "", r.Err
 		}
 		for _, c := range r.Channels {
-			if _, seen := seenChannels[c.ID]; !seen {
-				seenChannels[c.ID] = struct{}{}
+			if idx, seen := seenChannels[c.ID]; !seen {
+				seenChannels[c.ID] = len(channels)
 				channels = append(channels, c)
+			} else {
+				// Merge channel data, preferring non-zero member counts
+				if c.NumMembers > channels[idx].NumMembers {
+					channels[idx].NumMembers = c.NumMembers
+				}
 			}
 		}
 	}
