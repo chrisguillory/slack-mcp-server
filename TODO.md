@@ -4,46 +4,7 @@ This file tracks planned improvements, missing features, and enhancements for th
 
 ## 🚨 Missing Core Functionality
 
-### 1. Users List Tool
-**Priority: High** | **Status: Not Implemented**
-
-**Problem**: The server has no way for MCP clients (like Cursor IDE) to list users, even though all user data is cached and available.
-
-**Current State**:
-- ✅ User data is cached in `.users_cache.json`
-- ✅ User resolution works internally (search, message processing)
-- ✅ `channels_list` tool exists and works perfectly
-- ❌ **No `users_list` tool exists**
-
-**Impact**:
-- MCP clients (like Cursor IDE) cannot discover workspace users
-- No way to get user directory information
-- Limits the usefulness of the MCP server for user management tasks
-
-**Proposed Solution**:
-Add a `users_list` tool similar to `channels_list`:
-```go
-s.AddTool(mcp.NewTool("users_list",
-    mcp.WithDescription("Get list of users in the workspace"),
-    mcp.WithString("filter",
-        mcp.Description("Filter users by status: 'all', 'active', 'deleted', 'bots'")),
-    mcp.WithNumber("limit",
-        mcp.DefaultNumber(100),
-        mcp.Description("Maximum number of users to return")),
-    mcp.WithString("cursor",
-        mcp.Description("Cursor for pagination")),
-), usersHandler.UsersHandler)
-```
-
-**Implementation Notes**:
-- Use existing `ch.apiProvider.ProvideUsersMap()` 
-- Follow same pattern as `channels_list`
-- Return CSV format for consistency
-- Include user ID, name, real name, status, etc.
-
----
-
-### 2. Emoji List Tool
+### 1. Emoji List Tool
 **Priority: Medium** | **Status: Not Implemented**
 
 **Problem**: MCP clients cannot discover available emoji reactions, limiting the usefulness of reaction tools.
@@ -140,14 +101,6 @@ s.AddTool(mcp.NewTool("emoji_list",
 
 ## 📋 Implementation Checklist
 
-### Users List Tool
-- [ ] Create `UsersHandler` struct in `pkg/handler/`
-- [ ] Implement `UsersHandler` method
-- [ ] Add tool registration in `pkg/server/server.go`
-- [ ] Add tests for the new tool
-- [ ] Update documentation
-- [ ] Test with MCP clients
-
 ### Emoji List Tool
 - [ ] Create `EmojiHandler` struct in `pkg/handler/`
 - [ ] Implement `EmojiListHandler` method
@@ -161,26 +114,38 @@ s.AddTool(mcp.NewTool("emoji_list",
 - [ ] Update documentation
 - [ ] Test with MCP clients
 
-### Documentation Updates
-- [ ] Update README.md with new `users_list` tool
-- [ ] Add examples of user listing usage
-- [ ] Update configuration documentation
-- [ ] Add troubleshooting section for cache issues
-
 ---
 
 ## 🎯 Quick Wins
 
-1. **Users List Tool** - High impact, low complexity
-2. **Emoji List Tool** - Medium impact, low complexity
-3. **Better Error Messages** - Improves user experience
-4. **Cache Status Endpoints** - Helps with debugging
+1. **Emoji List Tool** - Medium impact, low complexity
+2. **Better Error Messages** - Improves user experience
+3. **Cache Status Endpoints** - Helps with debugging
+
+---
+
+## ✅ Completed Features (Recently Implemented)
+
+### Users List Tool
+- ✅ Created `UsersHandler` struct in `pkg/handler/users.go`
+- ✅ Implemented search functionality with `query` parameter
+- ✅ Added filtering by user type (active, deleted, bots, humans, admins)
+- ✅ Added field selection for token optimization
+- ✅ Added pagination with cursor support
+- ✅ Updated README.md with complete documentation
+- ✅ Created comprehensive test suite
+
+### Channels List Enhancement
+- ✅ Added `query` parameter for searching channels
+- ✅ Search works across name, topic, and purpose fields
+- ✅ Updated default limit from 100 to 1000
+- ✅ Updated test suite with search test cases
 
 ---
 
 ## 📝 Notes
 
-- The server already has all the infrastructure needed for user listing
+- The server now has complete user and channel listing/searching capabilities
 - Implementation should follow the established patterns in the codebase
 - Consider backward compatibility when adding new tools
 - Test thoroughly with different MCP clients (Cursor IDE, etc.)
