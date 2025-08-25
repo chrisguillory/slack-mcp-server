@@ -1,0 +1,475 @@
+package handler
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/korotovsky/slack-mcp-server/pkg/provider"
+	"github.com/korotovsky/slack-mcp-server/pkg/text"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/slack-go/slack"
+	"go.uber.org/zap"
+)
+
+var validFilterKeys = map[string]struct{}{
+	"is":     {},
+	"in":     {},
+	"from":   {},
+	"with":   {},
+	"before": {},
+	"after":  {},
+	"on":     {},
+	"during": {},
+}
+
+type SearchHandler struct {
+	apiProvider *provider.ApiProvider
+	logger      *zap.Logger
+}
+
+func NewSearchHandler(apiProvider *provider.ApiProvider, logger *zap.Logger) *SearchHandler {
+	return &SearchHandler{
+		apiProvider: apiProvider,
+		logger:      logger,
+	}
+}
+
+type searchParams struct {
+	query string
+	limit int
+	page  int
+}
+
+func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sh.logger.Debug("SearchMessagesHandler called", zap.Any("params", request.Params))
+
+	params, err := sh.parseParamsToolSearch(request)
+	if err != nil {
+		sh.logger.Error("Failed to parse search params", zap.Error(err))
+		return nil, err
+	}
+	sh.logger.Debug("Search params parsed", zap.String("query", params.query), zap.Int("limit", params.limit), zap.Int("page", params.page))
+
+	searchParams := slack.SearchParameters{
+		Sort:          slack.DEFAULT_SEARCH_SORT,
+		SortDirection: slack.DEFAULT_SEARCH_SORT_DIR,
+		Highlight:     false,
+		Count:         params.limit,
+		Page:          params.page,
+	}
+	messagesRes, _, err := sh.apiProvider.Slack().SearchContext(ctx, params.query, searchParams)
+	if err != nil {
+		sh.logger.Error("Slack SearchContext failed", zap.Error(err))
+		return nil, err
+	}
+	sh.logger.Debug("Search completed", zap.Int("matches", len(messagesRes.Matches)))
+
+	messages := sh.convertMessagesFromSearch(messagesRes.Matches)
+	if len(messages) > 0 && ((messagesRes.Pagination.PerPage * messagesRes.Pagination.PageCount) < messagesRes.Pagination.TotalCount) {
+		nextCursor := fmt.Sprintf("page:%d", messagesRes.Pagination.PageCount+1)
+		messages[len(messages)-1].Cursor = base64.StdEncoding.EncodeToString([]byte(nextCursor))
+	}
+	return marshalMessagesToCSV(messages)
+}
+
+func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchMessage) []Message {
+	usersMap := sh.apiProvider.ProvideUsersMap()
+	var messages []Message
+	warn := false
+
+	for _, msg := range slackMessages {
+		userName, realName, ok := getUserInfo(msg.User, usersMap.Users)
+
+		if !ok && msg.User == "" && msg.Username != "" {
+			userName, realName, ok = getBotInfo(msg.Username)
+		} else if !ok {
+			warn = true
+		}
+
+		threadTs, _ := extractThreadTS(msg.Permalink)
+
+		timestamp, err := text.TimestampToIsoRFC3339(msg.Timestamp)
+		if err != nil {
+			sh.logger.Error("Failed to convert timestamp to RFC3339", zap.Error(err))
+			continue
+		}
+
+		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments)
+
+		messages = append(messages, Message{
+			MsgID:     msg.Timestamp,
+			UserID:    msg.User,
+			UserName:  userName,
+			RealName:  realName,
+			Text:      text.ProcessText(msgText),
+			Channel:   fmt.Sprintf("#%s", msg.Channel.Name),
+			ThreadTs:  threadTs,
+			Time:      timestamp,
+			Reactions: "",
+		})
+	}
+
+	if ready, err := sh.apiProvider.IsReady(); !ready {
+		if warn && errors.Is(err, provider.ErrUsersNotReady) {
+			sh.logger.Warn(
+				"Slack users sync not ready; you may see raw UIDs instead of names and lose some functionality.",
+				zap.Error(err),
+			)
+		}
+	}
+	return messages
+}
+
+func (sh *SearchHandler) parseParamsToolSearch(req mcp.CallToolRequest) (*searchParams, error) {
+	rawQuery := strings.TrimSpace(req.GetString("search_query", ""))
+	freeText, filters := splitQuery(rawQuery)
+
+	if req.GetBool("filter_threads_only", false) {
+		addFilter(filters, "is", "thread")
+	}
+	if chName := req.GetString("filter_in_channel", ""); chName != "" {
+		f, err := sh.paramFormatChannel(chName)
+		if err != nil {
+			sh.logger.Error("Invalid channel filter", zap.String("filter", chName), zap.Error(err))
+			return nil, err
+		}
+		addFilter(filters, "in", f)
+	} else if im := req.GetString("filter_in_im_or_mpim", ""); im != "" {
+		f, err := sh.paramFormatUser(im)
+		if err != nil {
+			sh.logger.Error("Invalid IM/MPIM filter", zap.String("filter", im), zap.Error(err))
+			return nil, err
+		}
+		addFilter(filters, "in", f)
+	}
+	if with := req.GetString("filter_users_with", ""); with != "" {
+		f, err := sh.paramFormatUser(with)
+		if err != nil {
+			sh.logger.Error("Invalid with-user filter", zap.String("filter", with), zap.Error(err))
+			return nil, err
+		}
+		addFilter(filters, "with", f)
+	}
+	if from := req.GetString("filter_users_from", ""); from != "" {
+		f, err := sh.paramFormatUser(from)
+		if err != nil {
+			sh.logger.Error("Invalid from-user filter", zap.String("filter", from), zap.Error(err))
+			return nil, err
+		}
+		addFilter(filters, "from", f)
+	}
+
+	dateMap, err := buildDateFilters(
+		req.GetString("filter_date_before", ""),
+		req.GetString("filter_date_after", ""),
+		req.GetString("filter_date_on", ""),
+		req.GetString("filter_date_during", ""),
+	)
+	if err != nil {
+		sh.logger.Error("Invalid date filters", zap.Error(err))
+		return nil, err
+	}
+	for key, val := range dateMap {
+		addFilter(filters, key, val)
+	}
+
+	finalQuery := buildQuery(freeText, filters)
+	limit := req.GetInt("limit", 100)
+	cursor := req.GetString("cursor", "")
+
+	var (
+		page          int
+		decodedCursor []byte
+	)
+	if cursor != "" {
+		decodedCursor, err = base64.StdEncoding.DecodeString(cursor)
+		if err != nil {
+			sh.logger.Error("Invalid cursor decoding", zap.String("cursor", cursor), zap.Error(err))
+			return nil, fmt.Errorf("invalid cursor: %v", err)
+		}
+		parts := strings.Split(string(decodedCursor), ":")
+		if len(parts) != 2 {
+			sh.logger.Error("Invalid cursor format", zap.String("cursor", cursor))
+			return nil, fmt.Errorf("invalid cursor: %v", cursor)
+		}
+		page, err = strconv.Atoi(parts[1])
+		if err != nil || page < 1 {
+			sh.logger.Error("Invalid cursor page", zap.String("cursor", cursor), zap.Error(err))
+			return nil, fmt.Errorf("invalid cursor page: %v", err)
+		}
+	} else {
+		page = 1
+	}
+
+	sh.logger.Debug("Search parameters built",
+		zap.String("query", finalQuery),
+		zap.Int("limit", limit),
+		zap.Int("page", page),
+	)
+	return &searchParams{
+		query: finalQuery,
+		limit: limit,
+		page:  page,
+	}, nil
+}
+
+func (sh *SearchHandler) paramFormatUser(raw string) (string, error) {
+	users := sh.apiProvider.ProvideUsersMap()
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "U") {
+		u, ok := users.Users[raw]
+		if !ok {
+			return "", fmt.Errorf("user %q not found", raw)
+		}
+		return fmt.Sprintf("<@%s>", u.ID), nil
+	}
+	if strings.HasPrefix(raw, "<@") {
+		raw = raw[2:]
+	}
+	if strings.HasPrefix(raw, "@") {
+		raw = raw[1:]
+	}
+	uid, ok := users.UsersInv[raw]
+	if !ok {
+		return "", fmt.Errorf("user %q not found", raw)
+	}
+	return fmt.Sprintf("<@%s>", uid), nil
+}
+
+func (sh *SearchHandler) paramFormatChannel(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	cms := sh.apiProvider.ProvideChannelsMaps()
+	if strings.HasPrefix(raw, "#") {
+		if id, ok := cms.ChannelsInv[raw]; ok {
+			return "#" + cms.Channels[id].Name, nil
+		}
+		return "", fmt.Errorf("channel %q not found", raw)
+	}
+	if strings.HasPrefix(raw, "C") {
+		if chn, ok := cms.Channels[raw]; ok {
+			return "#" + chn.Name, nil
+		}
+		return "", fmt.Errorf("channel %q not found", raw)
+	}
+	return "", fmt.Errorf("invalid channel format: %q", raw)
+}
+
+func extractThreadTS(rawurl string) (string, error) {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return "", err
+	}
+	return u.Query().Get("thread_ts"), nil
+}
+
+func parseFlexibleDate(dateStr string) (time.Time, string, error) {
+	dateStr = strings.TrimSpace(dateStr)
+	standardFormats := []string{
+		"2006-01-02",      // YYYY-MM-DD
+		"2006/01/02",      // YYYY/MM/DD
+		"01-02-2006",      // MM-DD-YYYY
+		"01/02/2006",      // MM/DD/YYYY
+		"02-01-2006",      // DD-MM-YYYY
+		"02/01/2006",      // DD/MM/YYYY
+		"Jan 2, 2006",     // Jan 2, 2006
+		"January 2, 2006", // January 2, 2006
+		"2 Jan 2006",      // 2 Jan 2006
+		"2 January 2006",  // 2 January 2006
+	}
+	for _, fmtStr := range standardFormats {
+		if t, err := time.Parse(fmtStr, dateStr); err == nil {
+			return t, t.Format("2006-01-02"), nil
+		}
+	}
+
+	monthMap := map[string]int{
+		"january": 1, "jan": 1,
+		"february": 2, "feb": 2,
+		"march": 3, "mar": 3,
+		"april": 4, "apr": 4,
+		"may":  5,
+		"june": 6, "jun": 6,
+		"july": 7, "jul": 7,
+		"august": 8, "aug": 8,
+		"september": 9, "sep": 9, "sept": 9,
+		"october": 10, "oct": 10,
+		"november": 11, "nov": 11,
+		"december": 12, "dec": 12,
+	}
+
+	// Month-Year patterns
+	monthYear := regexp.MustCompile(`^(\d{4})\s+([A-Za-z]+)$|^([A-Za-z]+)\s+(\d{4})$`)
+	if m := monthYear.FindStringSubmatch(dateStr); m != nil {
+		var year int
+		var monStr string
+		if m[1] != "" && m[2] != "" {
+			year, _ = strconv.Atoi(m[1])
+			monStr = strings.ToLower(m[2])
+		} else {
+			year, _ = strconv.Atoi(m[4])
+			monStr = strings.ToLower(m[3])
+		}
+		if mon, ok := monthMap[monStr]; ok {
+			t := time.Date(year, time.Month(mon), 1, 0, 0, 0, 0, time.UTC)
+			return t, t.Format("2006-01-02"), nil
+		}
+	}
+
+	// Day-Month-Year and Month-Day-Year patterns
+	dmy1 := regexp.MustCompile(`^(\d{1,2})[-\s]+([A-Za-z]+)[-\s]+(\d{4})$`)
+	if m := dmy1.FindStringSubmatch(dateStr); m != nil {
+		day, _ := strconv.Atoi(m[1])
+		year, _ := strconv.Atoi(m[3])
+		monStr := strings.ToLower(m[2])
+		if mon, ok := monthMap[monStr]; ok {
+			t := time.Date(year, time.Month(mon), day, 0, 0, 0, 0, time.UTC)
+			if t.Day() == day {
+				return t, t.Format("2006-01-02"), nil
+			}
+		}
+	}
+	mdy := regexp.MustCompile(`^([A-Za-z]+)[-\s]+(\d{1,2})[-\s]+(\d{4})$`)
+	if m := mdy.FindStringSubmatch(dateStr); m != nil {
+		monStr := strings.ToLower(m[1])
+		day, _ := strconv.Atoi(m[2])
+		year, _ := strconv.Atoi(m[3])
+		if mon, ok := monthMap[monStr]; ok {
+			t := time.Date(year, time.Month(mon), day, 0, 0, 0, 0, time.UTC)
+			if t.Day() == day {
+				return t, t.Format("2006-01-02"), nil
+			}
+		}
+	}
+	ymd := regexp.MustCompile(`^(\d{4})[-\s]+([A-Za-z]+)[-\s]+(\d{1,2})$`)
+	if m := ymd.FindStringSubmatch(dateStr); m != nil {
+		year, _ := strconv.Atoi(m[1])
+		monStr := strings.ToLower(m[2])
+		day, _ := strconv.Atoi(m[3])
+		if mon, ok := monthMap[monStr]; ok {
+			t := time.Date(year, time.Month(mon), day, 0, 0, 0, 0, time.UTC)
+			if t.Day() == day {
+				return t, t.Format("2006-01-02"), nil
+			}
+		}
+	}
+
+	lower := strings.ToLower(dateStr)
+	now := time.Now().UTC()
+	switch lower {
+	case "today":
+		t := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+		return t, t.Format("2006-01-02"), nil
+	case "yesterday":
+		t := now.AddDate(0, 0, -1)
+		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		return t, t.Format("2006-01-02"), nil
+	case "tomorrow":
+		t := now.AddDate(0, 0, 1)
+		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		return t, t.Format("2006-01-02"), nil
+	}
+
+	daysAgo := regexp.MustCompile(`^(\d+)\s+days?\s+ago$`)
+	if m := daysAgo.FindStringSubmatch(lower); m != nil {
+		days, _ := strconv.Atoi(m[1])
+		t := now.AddDate(0, 0, -days)
+		t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+		return t, t.Format("2006-01-02"), nil
+	}
+
+	return time.Time{}, "", fmt.Errorf("unable to parse date: %s", dateStr)
+}
+
+func buildDateFilters(before, after, on, during string) (map[string]string, error) {
+	out := make(map[string]string)
+	if on != "" {
+		if during != "" || before != "" || after != "" {
+			return nil, fmt.Errorf("'on' cannot be combined with other date filters")
+		}
+		_, normalized, err := parseFlexibleDate(on)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'on' date: %v", err)
+		}
+		out["on"] = normalized
+		return out, nil
+	}
+	if during != "" {
+		if before != "" || after != "" {
+			return nil, fmt.Errorf("'during' cannot be combined with 'before' or 'after'")
+		}
+		_, normalized, err := parseFlexibleDate(during)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'during' date: %v", err)
+		}
+		out["during"] = normalized
+		return out, nil
+	}
+	if after != "" {
+		_, normalized, err := parseFlexibleDate(after)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'after' date: %v", err)
+		}
+		out["after"] = normalized
+	}
+	if before != "" {
+		_, normalized, err := parseFlexibleDate(before)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'before' date: %v", err)
+		}
+		out["before"] = normalized
+	}
+	if after != "" && before != "" {
+		a, _, _ := parseFlexibleDate(after)
+		b, _, _ := parseFlexibleDate(before)
+		if a.After(b) {
+			return nil, fmt.Errorf("'after' date is after 'before' date")
+		}
+	}
+	return out, nil
+}
+
+func isFilterKey(key string) bool {
+	_, ok := validFilterKeys[strings.ToLower(key)]
+	return ok
+}
+
+func splitQuery(q string) (freeText []string, filters map[string][]string) {
+	filters = make(map[string][]string)
+	for _, tok := range strings.Fields(q) {
+		parts := strings.SplitN(tok, ":", 2)
+		if len(parts) == 2 && isFilterKey(parts[0]) {
+			key := strings.ToLower(parts[0])
+			filters[key] = append(filters[key], parts[1])
+		} else {
+			freeText = append(freeText, tok)
+		}
+	}
+	return
+}
+
+func addFilter(filters map[string][]string, key, val string) {
+	for _, existing := range filters[key] {
+		if existing == val {
+			return
+		}
+	}
+	filters[key] = append(filters[key], val)
+}
+
+func buildQuery(freeText []string, filters map[string][]string) string {
+	var out []string
+	out = append(out, freeText...)
+	for _, key := range []string{"is", "in", "from", "with", "before", "after", "on", "during"} {
+		for _, val := range filters[key] {
+			out = append(out, fmt.Sprintf("%s:%s", key, val))
+		}
+	}
+	return strings.Join(out, " ")
+}

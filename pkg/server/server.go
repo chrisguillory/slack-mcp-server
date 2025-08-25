@@ -32,7 +32,12 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	)
 
 	conversationsHandler := handler.NewConversationsHandler(provider, logger)
+	chatHandler := handler.NewChatHandler(provider, logger)
+	reactionsHandler := handler.NewReactionsHandler(provider, logger)
+	searchHandler := handler.NewSearchHandler(provider, logger)
 	emojiHandler := handler.NewEmojiHandler(provider, logger)
+	channelsHandler := handler.NewChannelsHandler(provider, logger)
+	usersHandler := handler.NewUsersHandler(provider, logger)
 
 	s.AddTool(mcp.NewTool("conversations_history",
 		mcp.WithDescription("Get messages from the channel (or DM) by channel_id, the last row/column in the response is used as 'cursor' parameter for pagination if not empty"),
@@ -92,7 +97,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultString("text/markdown"),
 			mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'."),
 		),
-	), conversationsHandler.ChatPostMessageHandler)
+	), chatHandler.ChatPostMessageHandler)
 
 	// Add reaction tool
 	s.AddTool(mcp.NewTool("reactions_add",
@@ -106,7 +111,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("emoji",
 			mcp.Required(),
 			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
-	), conversationsHandler.ReactionsAddHandler)
+	), reactionsHandler.ReactionsAddHandler)
 
 	// Remove reaction tool
 	s.AddTool(mcp.NewTool("reactions_remove",
@@ -120,7 +125,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("emoji",
 			mcp.Required(),
 			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
-	), conversationsHandler.ReactionsRemoveHandler)
+	), reactionsHandler.ReactionsRemoveHandler)
 
 	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
@@ -162,9 +167,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultNumber(20),
 			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 100."),
 		),
-	), conversationsHandler.SearchMessagesHandler)
-
-	channelsHandler := handler.NewChannelsHandler(provider, logger)
+	), searchHandler.SearchMessagesHandler)
 
 	s.AddTool(mcp.NewTool("channels_list",
 		mcp.WithDescription("Get list of channels"),
@@ -194,8 +197,6 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Cursor for pagination. Use the cursor value returned from the previous request."),
 		),
 	), channelsHandler.ChannelsHandler)
-
-	usersHandler := handler.NewUsersHandler(provider, logger)
 
 	s.AddTool(mcp.NewTool("users_list",
 		mcp.WithDescription("Get list of users in the workspace"),
