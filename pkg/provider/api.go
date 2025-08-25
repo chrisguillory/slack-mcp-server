@@ -695,7 +695,16 @@ func mapChannel(
 		finalMemberCount = 2
 		if u, ok := usersMap[user]; ok {
 			channelName = "@" + u.Name
-			finalPurpose = "DM with " + u.RealName
+			// Use RealName, fallback to Profile.RealName if empty
+			displayName := u.RealName
+			if displayName == "" {
+				displayName = u.Profile.RealName
+			}
+			// Add (deactivated) suffix for deleted users
+			if u.Deleted && displayName != "" {
+				displayName += " (deactivated)"
+			}
+			finalPurpose = "DM with " + displayName
 		} else {
 			channelName = "@" + user
 			finalPurpose = "DM with " + user
@@ -707,7 +716,16 @@ func mapChannel(
 			var userNames []string
 			for _, uid := range members {
 				if u, ok := usersMap[uid]; ok {
-					userNames = append(userNames, u.RealName)
+					// Use RealName, fallback to Profile.RealName if empty
+					displayName := u.RealName
+					if displayName == "" {
+						displayName = u.Profile.RealName
+					}
+					// Add (deactivated) suffix for deleted users
+					if u.Deleted && displayName != "" {
+						displayName += " (deactivated)"
+					}
+					userNames = append(userNames, displayName)
 				} else {
 					userNames = append(userNames, uid)
 				}
