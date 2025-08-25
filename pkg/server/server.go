@@ -171,15 +171,23 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Required(),
 			mcp.Description("Comma-separated channel types. Allowed values: 'mpim', 'im', 'public_channel', 'private_channel'. Example: 'public_channel,private_channel,im'"),
 		),
+		mcp.WithString("fields",
+			mcp.DefaultString("id,name"),
+			mcp.Description("Comma-separated list of fields to return. Options: 'id', 'name', 'topic', 'purpose', 'member_count'. Use 'all' for all fields (backward compatibility). Default: 'id,name'"),
+		),
+		mcp.WithNumber("min_members",
+			mcp.DefaultNumber(0),
+			mcp.Description("Only return channels with at least this many members. Use to filter out abandoned/test channels. Default: 0 (no filtering)"),
+		),
 		mcp.WithString("sort",
 			mcp.Description("Type of sorting. Allowed values: 'popularity' - sort by number of members/participants in each channel."),
 		),
 		mcp.WithNumber("limit",
 			mcp.DefaultNumber(100),
-			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 1000 (maximum 999)."), // context fix for cursor: https://github.com/korotovsky/slack-mcp-server/issues/7
+			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 1000.")
 		),
 		mcp.WithString("cursor",
-			mcp.Description("Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request."),
+			mcp.Description("Cursor for pagination. Use the cursor value returned from the previous request."),
 		),
 	), channelsHandler.ChannelsHandler)
 

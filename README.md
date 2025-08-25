@@ -75,12 +75,33 @@ Search messages in a public channel, private channel, or direct message (DM, or 
   - `limit` (number, default: 20): The maximum number of items to return. Must be an integer between 1 and 100.
 
 ### 5. channels_list:
-Get list of channels
+Get list of channels with optimized field selection for token efficiency
 - **Parameters:**
   - `channel_types` (string, required): Comma-separated channel types. Allowed values: `mpim`, `im`, `public_channel`, `private_channel`. Example: `public_channel,private_channel,im`
+  - `fields` (string, default: "id,name"): Comma-separated list of fields to return. Options: `id`, `name`, `topic`, `purpose`, `member_count`. Use `all` for all fields (backward compatibility). Default: `id,name`
+  - `min_members` (number, default: 0): Only return channels with at least this many members. Use to filter out abandoned/test channels. Default: 0 (no filtering)
   - `sort` (string, optional): Type of sorting. Allowed values: `popularity` - sort by number of members/participants in each channel.
-  - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 1000 (maximum 999).
-  - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
+  - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 1000.
+  - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
+- **Response Format:**
+  The response includes metadata comments at the beginning:
+  - `# Total channels: X` - Total number of channels matching the filter criteria
+  - `# Returned in this page: Y` - Number of channels in this response
+  - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
+
+### 6. conversations_add_reaction:
+Add an emoji reaction to a message
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
+  - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
+
+### 7. conversations_remove_reaction:
+Remove an emoji reaction from a message
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
+  - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
 ## Resources
 
@@ -133,6 +154,7 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA_TOOLKIT`     | No        | `nil`                     | Inject HTTPToolkit CA certificate to root trust-store for MitM debugging                                                                                                                                                                                                                  |
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
 | `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `conversations_add_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
+| `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `conversations_add_reaction` and `conversations_remove_reaction` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `conversations_add_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |

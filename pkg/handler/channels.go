@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gocarina/gocsv"
@@ -113,14 +116,47 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	sortType := request.GetString("sort", "popularity")
 	types := request.GetString("channel_types", provider.PubChanType)
 	cursor := request.GetString("cursor", "")
-	limit := request.GetInt("limit", 0)
+	// Changed: use 100 as default instead of 0, since 0 triggers another default later
+	limit := request.GetInt("limit", 100)
+	fields := request.GetString("fields", "id,name")
+	minMembers := request.GetInt("min_members", 0)
+
+	// Debug: log raw request to see what's being passed
+	ch.logger.Info("Raw request received",
+		zap.Any("request", request),
+		zap.Int("parsed_limit", limit),
+	)
 
 	ch.logger.Debug("Request parameters",
 		zap.String("sort", sortType),
 		zap.String("channel_types", types),
 		zap.String("cursor", cursor),
 		zap.Int("limit", limit),
+		zap.String("fields", fields),
+		zap.Int("min_members", minMembers),
 	)
+
+	// Parse fields parameter
+	requestedFields := make(map[string]bool)
+	if fields == "all" {
+		// Backward compatibility - include all fields
+		requestedFields["id"] = true
+		requestedFields["name"] = true
+		requestedFields["topic"] = true
+		requestedFields["purpose"] = true
+		requestedFields["member_count"] = true
+	} else {
+		for _, field := range strings.Split(fields, ",") {
+			field = strings.TrimSpace(strings.ToLower(field))
+			// Normalize field names
+			if field == "membercount" {
+				field = "member_count"
+			}
+			requestedFields[field] = true
+		}
+	}
+
+	ch.logger.Debug("Requested fields", zap.Any("fields", requestedFields))
 
 	// MCP Inspector v0.14.0 has issues with Slice type
 	// introspection, so some type simplification makes sense here
@@ -142,25 +178,50 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 
 	ch.logger.Debug("Validated channel types", zap.Strings("types", channelTypes))
 
-	if limit == 0 {
+	// Validate limit range
+	if limit <= 0 {
 		limit = 100
-		ch.logger.Debug("Limit not provided, using default", zap.Int("limit", limit))
-	}
-	if limit > 999 {
-		ch.logger.Warn("Limit exceeds maximum, capping to 999", zap.Int("requested", limit))
-		limit = 999
+		ch.logger.Debug("Invalid or missing limit, using default", zap.Int("limit", limit))
+	} else if limit > 1000 {
+		ch.logger.Warn("Limit exceeds maximum, capping to 1000", zap.Int("requested", limit))
+		limit = 1000
 	}
 
-	var (
-		nextcur     string
-		channelList []Channel
-	)
+	var nextcur string
 
 	allChannels := ch.apiProvider.ProvideChannelsMaps().Channels
 	ch.logger.Debug("Total channels available", zap.Int("count", len(allChannels)))
 
 	channels := filterChannelsByTypes(allChannels, channelTypes)
 	ch.logger.Debug("Channels after filtering by type", zap.Int("count", len(channels)))
+
+	// Apply min_members filter
+	if minMembers > 0 {
+		var filtered []provider.Channel
+		for _, ch := range channels {
+			if ch.MemberCount >= minMembers {
+				filtered = append(filtered, ch)
+			}
+		}
+		ch.logger.Debug("Channels after min_members filter",
+			zap.Int("before", len(channels)),
+			zap.Int("after", len(filtered)),
+			zap.Int("min_members", minMembers),
+		)
+		channels = filtered
+	}
+
+	// Sort BEFORE pagination to ensure consistent ordering
+	switch sortType {
+	case "popularity":
+		ch.logger.Debug("Sorting channels by popularity (member count)")
+		sort.Slice(channels, func(i, j int) bool {
+			return channels[i].MemberCount > channels[j].MemberCount
+		})
+	default:
+		// Default sort by ID happens in paginateChannels
+		ch.logger.Debug("No custom sorting applied", zap.String("sort_type", sortType))
+	}
 
 	var chans []provider.Channel
 
@@ -175,38 +236,86 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 		zap.Bool("has_next_page", nextcur != ""),
 	)
 
-	for _, channel := range chans {
-		channelList = append(channelList, Channel{
-			ID:          channel.ID,
-			Name:        channel.Name,
-			Topic:       channel.Topic,
-			Purpose:     channel.Purpose,
-			MemberCount: channel.MemberCount,
-		})
+	// Build dynamic CSV with only requested fields
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+
+	// Determine field order and headers
+	var headers []string
+	var fieldOrder []string
+
+	// Define consistent field order
+	possibleFields := []struct {
+		key    string
+		header string
+	}{
+		{"id", "ID"},
+		{"name", "Name"},
+		{"topic", "Topic"},
+		{"purpose", "Purpose"},
+		{"member_count", "MemberCount"},
 	}
 
-	switch sortType {
-	case "popularity":
-		ch.logger.Debug("Sorting channels by popularity (member count)")
-		sort.Slice(channelList, func(i, j int) bool {
-			return channelList[i].MemberCount > channelList[j].MemberCount
-		})
-	default:
-		ch.logger.Debug("No sorting applied", zap.String("sort_type", sortType))
+	for _, field := range possibleFields {
+		if requestedFields[field.key] {
+			fieldOrder = append(fieldOrder, field.key)
+			headers = append(headers, field.header)
+		}
 	}
 
-	if len(channelList) > 0 && nextcur != "" {
-		channelList[len(channelList)-1].Cursor = nextcur
-		ch.logger.Debug("Added cursor to last channel", zap.String("cursor", nextcur))
+	// If no fields requested, use defaults
+	if len(fieldOrder) == 0 {
+		fieldOrder = []string{"id", "name"}
+		headers = []string{"ID", "Name"}
 	}
 
-	csvBytes, err := gocsv.MarshalBytes(&channelList)
-	if err != nil {
-		ch.logger.Error("Failed to marshal channels to CSV", zap.Error(err))
+	// Write headers
+	if err := writer.Write(headers); err != nil {
+		ch.logger.Error("Failed to write CSV headers", zap.Error(err))
 		return nil, err
 	}
 
-	return mcp.NewToolResultText(string(csvBytes)), nil
+	// Write data rows
+	for _, channel := range chans {
+		var row []string
+		for _, field := range fieldOrder {
+			switch field {
+			case "id":
+				row = append(row, channel.ID)
+			case "name":
+				row = append(row, channel.Name)
+			case "topic":
+				row = append(row, channel.Topic)
+			case "purpose":
+				row = append(row, channel.Purpose)
+			case "member_count":
+				row = append(row, fmt.Sprintf("%d", channel.MemberCount))
+			}
+		}
+		if err := writer.Write(row); err != nil {
+			ch.logger.Error("Failed to write CSV row", zap.Error(err))
+			return nil, err
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		ch.logger.Error("CSV writer error", zap.Error(err))
+		return nil, err
+	}
+
+	// Build result with metadata at the beginning
+	var result string
+	result += fmt.Sprintf("# Total channels: %d\n", len(channels))
+	result += fmt.Sprintf("# Returned in this page: %d\n", len(chans))
+	if nextcur != "" {
+		result += fmt.Sprintf("# Next cursor: %s\n", nextcur)
+	} else {
+		result += "# Next cursor: (none - last page)\n"
+	}
+	result += buf.String()
+
+	return mcp.NewToolResultText(result), nil
 }
 
 func filterChannelsByTypes(channels map[string]provider.Channel, types []string) []provider.Channel {
@@ -258,25 +367,47 @@ func filterChannelsByTypes(channels map[string]provider.Channel, types []string)
 func paginateChannels(channels []provider.Channel, cursor string, limit int) ([]provider.Channel, string) {
 	logger := zap.L()
 
-	sort.Slice(channels, func(i, j int) bool {
-		return channels[i].ID < channels[j].ID
-	})
+	// Only sort if not already sorted (e.g., by popularity)
+	// Check if channels are sorted by ID by checking first few elements
+	needsSort := true
+	if len(channels) > 1 {
+		// If already sorted by member count descending (popularity), don't re-sort
+		if channels[0].MemberCount >= channels[len(channels)-1].MemberCount {
+			needsSort = false
+		}
+	}
+	
+	if needsSort {
+		sort.Slice(channels, func(i, j int) bool {
+			return channels[i].ID < channels[j].ID
+		})
+	}
 
 	startIndex := 0
 	if cursor != "" {
 		if decoded, err := base64.StdEncoding.DecodeString(cursor); err == nil {
-			lastID := string(decoded)
-			for i, ch := range channels {
-				if ch.ID > lastID {
-					startIndex = i
-					break
+			// For simple index-based pagination
+			if idx, err := strconv.Atoi(string(decoded)); err == nil {
+				startIndex = idx
+				logger.Debug("Using index-based cursor",
+					zap.String("cursor", cursor),
+					zap.Int("start_index", startIndex),
+				)
+			} else {
+				// Fallback to ID-based pagination
+				lastID := string(decoded)
+				for i, ch := range channels {
+					if ch.ID > lastID {
+						startIndex = i
+						break
+					}
 				}
+				logger.Debug("Using ID-based cursor",
+					zap.String("cursor", cursor),
+					zap.String("decoded_id", lastID),
+					zap.Int("start_index", startIndex),
+				)
 			}
-			logger.Debug("Decoded cursor",
-				zap.String("cursor", cursor),
-				zap.String("decoded_id", lastID),
-				zap.Int("start_index", startIndex),
-			)
 		} else {
 			logger.Warn("Failed to decode cursor",
 				zap.String("cursor", cursor),
@@ -294,9 +425,10 @@ func paginateChannels(channels []provider.Channel, cursor string, limit int) ([]
 
 	var nextCursor string
 	if endIndex < len(channels) {
-		nextCursor = base64.StdEncoding.EncodeToString([]byte(channels[endIndex-1].ID))
+		// Use simple index-based cursor for consistency
+		nextCursor = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", endIndex)))
 		logger.Debug("Generated next cursor",
-			zap.String("last_id", channels[endIndex-1].ID),
+			zap.Int("next_index", endIndex),
 			zap.String("next_cursor", nextCursor),
 		)
 	}

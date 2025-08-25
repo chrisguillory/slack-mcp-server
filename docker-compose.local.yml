@@ -1,0 +1,58 @@
+# Docker Compose for local development with live code mounting and logging
+# This uses your local code directly without rebuilding the Docker image
+version: '3.8'
+
+services:
+  slack-mcp-local:
+    image: golang:1.24
+    container_name: slack-mcp-local
+    working_dir: /app
+    command: go run cmd/slack-mcp-server/main.go mcp-server --transport stdio
+    volumes:
+      # Mount source code directories (read-only)
+      - ./cmd:/app/cmd:ro
+      - ./pkg:/app/pkg:ro
+      - ./go.mod:/app/go.mod:ro
+      - ./go.sum:/app/go.sum:ro
+      # Mount cache files (read-write so they can be updated)
+      - ./.users_cache.json:/app/.users_cache.json
+      - ./.channels_cache_v2.json:/app/.channels_cache_v2.json
+      # Mount go mod cache for faster builds
+      - go-mod-cache:/go/pkg/mod
+    environment:
+      # Pass through Slack tokens from host environment
+      SLACK_MCP_XOXC_TOKEN: ${SLACK_MCP_XOXC_TOKEN}
+      SLACK_MCP_XOXD_TOKEN: ${SLACK_MCP_XOXD_TOKEN}
+      SLACK_MCP_XOXP_TOKEN: ${SLACK_MCP_XOXP_TOKEN}
+      # MCP server configuration - passed from host
+      SLACK_MCP_CUSTOM_TLS: ${SLACK_MCP_CUSTOM_TLS}
+      SLACK_MCP_USER_AGENT: ${SLACK_MCP_USER_AGENT}
+      # Optional features
+      SLACK_MCP_ADD_MESSAGE_TOOL: ${SLACK_MCP_ADD_MESSAGE_TOOL:-}
+      SLACK_MCP_ADD_REACTION_TOOL: ${SLACK_MCP_ADD_REACTION_TOOL:-}
+      # Logging
+      SLACK_MCP_LOG_LEVEL: ${SLACK_MCP_LOG_LEVEL:-debug}
+      # Go environment
+      CGO_ENABLED: "0"
+      GOTOOLCHAIN: "local"
+      GOCACHE: "/go/pkg/mod"
+    stdin_open: true
+    tty: true
+    # Ensure clean shutdown
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    # Restart policy for development
+    restart: "no"
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '2'
+        reservations:
+          memory: 256M
+          cpus: '0.5'
+
+volumes:
+  go-mod-cache:
+    name: slack-mcp-go-mod-cache
