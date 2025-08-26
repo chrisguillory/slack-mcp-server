@@ -178,6 +178,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultNumber(20),
 			mcp.Description("The maximum number of items to return. Must be an integer between 1 and 100."),
 		),
+		mcp.WithString("fields",
+			mcp.DefaultString("msgID,userUser,realName,channelID,text,time"),
+			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'permalink'. Use 'all' for all fields. Default excludes 'permalink' for token efficiency."),
+		),
 	), searchHandler.SearchMessagesHandler)
 
 	s.AddTool(mcp.NewTool("channels_list",

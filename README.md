@@ -76,6 +76,7 @@ Search messages in a public channel, private channel, or direct message (DM, or 
   - `filter_threads_only` (boolean, default: false): If true, the response will include only messages from threads. Default is boolean false.
   - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
   - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 100.
+  - `fields` (string, default: "msgID,userUser,realName,channelID,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`, `permalink`. Use `all` for all fields. Default excludes `permalink` for token efficiency. To include message permalinks, add `permalink` to the fields list.
 - **Response Format:**
   The response includes metadata comments at the beginning:
   - `# Total messages: X` - Total number of messages matching the search criteria

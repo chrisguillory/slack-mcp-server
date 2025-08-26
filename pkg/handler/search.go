@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"net/url"
@@ -59,6 +61,7 @@ type SearchMessage struct {
 	Text      string `json:"text"`
 	Time      string `json:"time"`
 	Reactions string `json:"reactions,omitempty"`
+	Permalink string `json:"permalink"`
 }
 
 func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -94,8 +97,12 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 		nextCursor = base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("page:%d", messagesRes.Pagination.Page+1)))
 	}
 
+	// Parse fields parameter
+	fields := request.GetString("fields", "msgID,userUser,realName,channelID,text,time")
+	requestedFields := sh.parseFields(fields)
+
 	// Build result with metadata at the beginning (similar to channels_list and users_list)
-	csvBytes, err := marshalSearchMessagesToCSVBytes(messages)
+	csvBytes, err := sh.marshalSearchMessagesWithFields(messages, requestedFields)
 	if err != nil {
 		return mcp.NewToolResultErrorFromErr("Failed to format search results", err), nil
 	}
@@ -153,6 +160,7 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 			ThreadTs:  threadTs,
 			Time:      timestamp,
 			Reactions: "",
+			Permalink: msg.Permalink,
 		})
 	}
 
@@ -537,6 +545,110 @@ func buildQuery(freeText []string, filters map[string][]string) string {
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+func (sh *SearchHandler) parseFields(fields string) map[string]bool {
+	requestedFields := make(map[string]bool)
+
+	if fields == "all" {
+		// Include all available fields
+		requestedFields["msgID"] = true
+		requestedFields["userID"] = true
+		requestedFields["userUser"] = true
+		requestedFields["realName"] = true
+		requestedFields["channelID"] = true
+		requestedFields["threadTs"] = true
+		requestedFields["text"] = true
+		requestedFields["time"] = true
+		requestedFields["reactions"] = true
+		requestedFields["permalink"] = true
+	} else {
+		// Parse comma-separated fields
+		for _, field := range strings.Split(fields, ",") {
+			field = strings.TrimSpace(field)
+			if field != "" {
+				requestedFields[field] = true
+			}
+		}
+	}
+
+	return requestedFields
+}
+
+func (sh *SearchHandler) marshalSearchMessagesWithFields(messages []SearchMessage, fields map[string]bool) ([]byte, error) {
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+
+	// Define field order and headers
+	possibleFields := []struct {
+		key    string
+		header string
+	}{
+		{"msgID", "MsgID"},
+		{"userID", "UserID"},
+		{"userUser", "UserName"},
+		{"realName", "RealName"},
+		{"channelID", "Channel"},
+		{"threadTs", "ThreadTs"},
+		{"text", "Text"},
+		{"time", "Time"},
+		{"reactions", "Reactions"},
+		{"permalink", "Permalink"},
+	}
+
+	// Build headers based on requested fields
+	var headers []string
+	var fieldOrder []string
+	for _, field := range possibleFields {
+		if fields[field.key] {
+			headers = append(headers, field.header)
+			fieldOrder = append(fieldOrder, field.key)
+		}
+	}
+
+	// Write headers
+	if err := writer.Write(headers); err != nil {
+		return nil, err
+	}
+
+	// Write data rows
+	for _, msg := range messages {
+		var row []string
+		for _, field := range fieldOrder {
+			switch field {
+			case "msgID":
+				row = append(row, msg.MsgID)
+			case "userID":
+				row = append(row, msg.UserID)
+			case "userUser":
+				row = append(row, msg.UserName)
+			case "realName":
+				row = append(row, msg.RealName)
+			case "channelID":
+				row = append(row, msg.Channel)
+			case "threadTs":
+				row = append(row, msg.ThreadTs)
+			case "text":
+				row = append(row, msg.Text)
+			case "time":
+				row = append(row, msg.Time)
+			case "reactions":
+				row = append(row, msg.Reactions)
+			case "permalink":
+				row = append(row, msg.Permalink)
+			}
+		}
+		if err := writer.Write(row); err != nil {
+			return nil, err
+		}
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
 }
 
 func marshalSearchMessagesToCSVBytes(messages []SearchMessage) ([]byte, error) {
