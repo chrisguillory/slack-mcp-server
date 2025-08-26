@@ -3,7 +3,8 @@
     "allow": [
       "Bash(grep:*)",
       "Bash(make test:*)",
-      "Bash(make build:*)"
+      "Bash(make build:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []
