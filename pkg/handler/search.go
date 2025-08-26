@@ -263,22 +263,41 @@ func (sh *SearchHandler) parseParamsToolSearch(req mcp.CallToolRequest) (*search
 func (sh *SearchHandler) paramFormatUser(raw string) (string, error) {
 	users := sh.apiProvider.ProvideUsersMap()
 	raw = strings.TrimSpace(raw)
+
+	// Handle DM channel IDs (format: D...)
+	if strings.HasPrefix(raw, "D") {
+		// For DM channels, we need to extract the user from the channel
+		// The search API expects @username format for DMs
+		cms := sh.apiProvider.ProvideChannelsMaps()
+		if dm, ok := cms.Channels[raw]; ok {
+			// For DMs, use the channel name (which is typically the username)
+			return fmt.Sprintf("@%s", dm.Name), nil
+		}
+		return "", fmt.Errorf("DM channel %q not found or not accessible. Please verify the channel ID or try using @username instead", raw)
+	}
+
+	// Handle user IDs (format: U...)
 	if strings.HasPrefix(raw, "U") {
 		u, ok := users.Users[raw]
 		if !ok {
-			return "", fmt.Errorf("user %q not found", raw)
+			return "", fmt.Errorf("user ID %q not found. Please verify the user exists and is accessible", raw)
 		}
 		return fmt.Sprintf("<@%s>", u.ID), nil
 	}
+
+	// Strip @ prefix if present
 	if strings.HasPrefix(raw, "<@") {
 		raw = raw[2:]
 	}
 	if strings.HasPrefix(raw, "@") {
 		raw = raw[1:]
 	}
+
+	// Look up by username
 	uid, ok := users.UsersInv[raw]
 	if !ok {
-		return "", fmt.Errorf("user %q not found", raw)
+		// Provide helpful error message with suggestions
+		return "", fmt.Errorf("username %q not found. Try using the full username, @username format, or the user/channel ID directly", raw)
 	}
 	return fmt.Sprintf("<@%s>", uid), nil
 }
@@ -286,19 +305,25 @@ func (sh *SearchHandler) paramFormatUser(raw string) (string, error) {
 func (sh *SearchHandler) paramFormatChannel(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	cms := sh.apiProvider.ProvideChannelsMaps()
+
+	// Handle #channel format
 	if strings.HasPrefix(raw, "#") {
 		if id, ok := cms.ChannelsInv[raw]; ok {
 			return "#" + cms.Channels[id].Name, nil
 		}
-		return "", fmt.Errorf("channel %q not found", raw)
+		return "", fmt.Errorf("channel %q not found. Please verify the channel name and that you have access to it", raw)
 	}
+
+	// Handle channel ID format (C...)
 	if strings.HasPrefix(raw, "C") {
 		if chn, ok := cms.Channels[raw]; ok {
 			return "#" + chn.Name, nil
 		}
-		return "", fmt.Errorf("channel %q not found", raw)
+		return "", fmt.Errorf("channel ID %q not found or not accessible. Please verify the channel ID is correct", raw)
 	}
-	return "", fmt.Errorf("invalid channel format: %q", raw)
+
+	// Invalid format - provide helpful message
+	return "", fmt.Errorf("invalid channel format %q. Use #channel-name or channel ID (starting with C)", raw)
 }
 
 func extractThreadTS(rawurl string) (string, error) {
