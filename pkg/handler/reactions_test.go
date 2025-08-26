@@ -7,7 +7,7 @@ import (
 
 // TestUnitIsReactionAllowed validates the SLACK_MCP_ADD_REACTION_TOOL policy parsing.
 func TestUnitIsReactionAllowed(t *testing.T) {
-	handler := &ConversationsHandler{}
+	handler := &ReactionsHandler{}
 
 	t.Run("default disabled when unset", func(t *testing.T) {
 		t.Setenv("SLACK_MCP_ADD_REACTION_TOOL", "")

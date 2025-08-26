@@ -87,6 +87,9 @@ type SlackAPI interface {
 	// Reactions
 	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+
+	// Message management
+	DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error)
 }
 
 type MCPSlackClient struct {
@@ -294,6 +297,11 @@ func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string,
 		return c.slackClient.RemoveReactionContext(ctx, name, item)
 	}
 	return c.edgeClient.RemoveReactionContext(ctx, name, item)
+}
+
+func (c *MCPSlackClient) DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error) {
+	// chat.delete is only available via standard API
+	return c.slackClient.DeleteMessageContext(ctx, channel, messageTimestamp)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {

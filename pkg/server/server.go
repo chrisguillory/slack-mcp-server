@@ -127,6 +127,17 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Emoji name without colons (e.g., thumbsup, rocket)")),
 	), reactionsHandler.ReactionsRemoveHandler)
 
+	// Delete message tool
+	s.AddTool(mcp.NewTool("chat_delete_message",
+		mcp.WithDescription("Delete a message from a channel"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+	), chatHandler.ChatDeleteMessageHandler)
+
 	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
 		mcp.WithString("search_query",

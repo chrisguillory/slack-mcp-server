@@ -31,6 +31,7 @@ services:
       # Optional features
       SLACK_MCP_ADD_MESSAGE_TOOL: ${SLACK_MCP_ADD_MESSAGE_TOOL:-}
       SLACK_MCP_ADD_REACTION_TOOL: ${SLACK_MCP_ADD_REACTION_TOOL:-}
+      SLACK_MCP_DELETE_MESSAGE_TOOL: ${SLACK_MCP_DELETE_MESSAGE_TOOL:-}
       # Logging
       SLACK_MCP_LOG_LEVEL: ${SLACK_MCP_LOG_LEVEL:-debug}
       # Go environment

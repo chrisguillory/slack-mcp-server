@@ -19,8 +19,7 @@ cd "$REPO_ROOT"
 eval "$(direnv export bash)"
 
 # Set Slack MCP environment variables
-export SLACK_MCP_CUSTOM_TLS="true"
-export SLACK_MCP_USER_AGENT="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+# These are now set in .envrc-personal
 
 # Check if Slack tokens are available from environment or .envrc-personal
 if [ -z "${SLACK_MCP_XOXC_TOKEN:-}" ] || [ -z "${SLACK_MCP_XOXD_TOKEN:-}" ]; then
@@ -28,21 +27,6 @@ if [ -z "${SLACK_MCP_XOXC_TOKEN:-}" ] || [ -z "${SLACK_MCP_XOXD_TOKEN:-}" ]; the
     # Show dialog to user
     osascript -e 'display dialog "Missing Slack MCP Tokens\n\nAdd the following to slack-mcp-server/.envrc-personal:\nexport SLACK_MCP_XOXC_TOKEN=your_xoxc_token_here\nexport SLACK_MCP_XOXD_TOKEN=your_xoxd_token_here\n\nOr set them directly in your shell environment." buttons {"OK"} default button "OK" with icon stop'
     exit 1
-fi
-
-# Optional: Set additional environment variables if they exist
-if [ -n "${SLACK_MCP_ADD_MESSAGE_TOOL:-}" ]; then
-	export SLACK_MCP_ADD_MESSAGE_TOOL
-fi
-
-if [ -n "${SLACK_MCP_ADD_REACTION_TOOL:-}" ]; then
-	export SLACK_MCP_ADD_REACTION_TOOL
-fi
-
-if [ -n "${SLACK_MCP_LOG_LEVEL:-}" ]; then
-    export SLACK_MCP_LOG_LEVEL
-else
-    export SLACK_MCP_LOG_LEVEL="debug"
 fi
 
 # Verify Docker is available
