@@ -68,7 +68,7 @@ func (ch *ConversationsHandler) ConversationsHistoryHandler(ctx context.Context,
 	params, err := ch.parseParamsToolConversations(request)
 	if err != nil {
 		ch.logger.Error("Failed to parse history params", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse conversation parameters", err), nil
 	}
 	ch.logger.Debug("History params parsed",
 		zap.String("channel", params.channel),
@@ -89,7 +89,7 @@ func (ch *ConversationsHandler) ConversationsHistoryHandler(ctx context.Context,
 	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
 	if err != nil {
 		ch.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to fetch conversation history", err), nil
 	}
 
 	ch.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
@@ -109,12 +109,12 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 	params, err := ch.parseParamsToolConversations(request)
 	if err != nil {
 		ch.logger.Error("Failed to parse replies params", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse conversation parameters", err), nil
 	}
 	threadTs := request.GetString("thread_ts", "")
 	if threadTs == "" {
 		ch.logger.Error("thread_ts not provided for replies", zap.String("thread_ts", threadTs))
-		return nil, errors.New("thread_ts must be a string")
+		return mcp.NewToolResultError("thread_ts must be provided"), nil
 	}
 
 	repliesParams := slack.GetConversationRepliesParameters{
@@ -129,7 +129,7 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 	replies, hasMore, nextCursor, err := ch.apiProvider.Slack().GetConversationRepliesContext(ctx, &repliesParams)
 	if err != nil {
 		ch.logger.Error("GetConversationRepliesContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to fetch conversation replies", err), nil
 	}
 	ch.logger.Debug("Fetched conversation replies", zap.Int("count", len(replies)))
 
@@ -244,7 +244,7 @@ func (ch *ConversationsHandler) parseParamsToolConversations(request mcp.CallToo
 	channel := request.GetString("channel_id", "")
 	if channel == "" {
 		ch.logger.Error("channel_id missing in conversations params")
-		return nil, errors.New("channel_id must be a string")
+		return nil, errors.New("channel_id must be provided")
 	}
 
 	limit := request.GetString("limit", "")
@@ -285,13 +285,13 @@ func (ch *ConversationsHandler) parseParamsToolConversations(request mcp.CallToo
 					zap.Error(err),
 				)
 			}
-			return nil, fmt.Errorf("channel %q not found in empty cache", channel)
+			return nil, fmt.Errorf("channel %q not found (cache not ready)", channel)
 		}
 		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
 		chn, ok := channelsMaps.ChannelsInv[channel]
 		if !ok {
 			ch.logger.Error("Channel not found in synced cache", zap.String("channel", channel))
-			return nil, fmt.Errorf("channel %q not found in synced cache. Try to remove old cache file and restart MCP Server", channel)
+			return nil, fmt.Errorf("channel %q not found. Try removing cache file and restarting MCP Server", channel)
 		}
 		channel = channelsMaps.Channels[chn].ID
 	}

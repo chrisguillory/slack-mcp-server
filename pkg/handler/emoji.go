@@ -42,13 +42,13 @@ func (eh *EmojiHandler) EmojiListHandler(ctx context.Context, request mcp.CallTo
 	// Check if basic API is ready (users and channels)
 	if ready, err := eh.apiProvider.IsReady(); !ready {
 		eh.logger.Error("API provider not ready", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
 	}
 
 	// Check if emojis are ready
 	if ready, err := eh.apiProvider.IsEmojisReady(); !ready {
 		eh.logger.Error("Emojis cache not ready", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Emojis cache not ready", err), nil
 	}
 
 	// Get parameters with defaults

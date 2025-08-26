@@ -42,7 +42,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 	params, err := ch.parseParamsToolAddMessage(request)
 	if err != nil {
 		ch.logger.Error("Failed to parse add-message params", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse message parameters", err), nil
 	}
 
 	var options []slack.MsgOption
@@ -64,7 +64,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 			options = append(options, slack.MsgOptionBlocks(blocks...))
 		}
 	default:
-		return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
+		return mcp.NewToolResultError("content_type must be either 'text/plain' or 'text/markdown'"), nil
 	}
 
 	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
@@ -83,7 +83,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 	respChannel, respTimestamp, err := ch.apiProvider.Slack().PostMessageContext(ctx, params.channel, options...)
 	if err != nil {
 		ch.logger.Error("Slack PostMessageContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to post message", err), nil
 	}
 
 	toolConfig := os.Getenv("SLACK_MCP_ADD_MESSAGE_MARK")
@@ -91,7 +91,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 		err := ch.apiProvider.Slack().MarkConversationContext(ctx, params.channel, respTimestamp)
 		if err != nil {
 			ch.logger.Error("Slack MarkConversationContext failed", zap.Error(err))
-			return nil, err
+			return mcp.NewToolResultErrorFromErr("Failed to mark conversation as read", err), nil
 		}
 	}
 
@@ -106,7 +106,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
 	if err != nil {
 		ch.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to fetch posted message", err), nil
 	}
 	ch.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
 
@@ -179,19 +179,19 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	toolConfig := os.Getenv("SLACK_MCP_DELETE_MESSAGE_TOOL")
 	if toolConfig == "" {
 		ch.logger.Error("Delete-message tool disabled by default")
-		return nil, errors.New(
+		return mcp.NewToolResultError(
 			"by default, the chat_delete_message tool is disabled to prevent accidental message deletion. " +
 				"To enable it, set the SLACK_MCP_DELETE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
 				"to limit where the MCP can delete messages, e.g. 'SLACK_MCP_DELETE_MESSAGE_TOOL=C1234567890,D0987654321', " +
 				"'SLACK_MCP_DELETE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_DELETE_MESSAGE_TOOL=true' for all channels and DMs",
-		)
+		), nil
 	}
 
 	// Get and validate channel_id
 	channel := request.GetString("channel_id", "")
 	if channel == "" {
 		ch.logger.Error("channel_id missing in delete-message params")
-		return nil, errors.New("channel_id must be a string")
+		return mcp.NewToolResultError("channel_id must be provided"), nil
 	}
 
 	// Handle channel name resolution
@@ -200,7 +200,7 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 		chn, ok := channelsMaps.ChannelsInv[channel]
 		if !ok {
 			ch.logger.Error("Channel not found", zap.String("channel", channel))
-			return nil, fmt.Errorf("channel %q not found", channel)
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channel)), nil
 		}
 		channel = channelsMaps.Channels[chn].ID
 	}
@@ -208,18 +208,18 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	// Check if channel is allowed for deletion
 	if !isChannelAllowedForDeletion(channel) {
 		ch.logger.Warn("Delete-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
-		return nil, fmt.Errorf("chat_delete_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
+		return mcp.NewToolResultError(fmt.Sprintf("chat_delete_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
 	}
 
 	// Get and validate timestamp
 	timestamp := request.GetString("timestamp", "")
 	if timestamp == "" {
 		ch.logger.Error("timestamp missing in delete-message params")
-		return nil, errors.New("timestamp must be a string")
+		return mcp.NewToolResultError("timestamp must be provided"), nil
 	}
 	if !strings.Contains(timestamp, ".") {
 		ch.logger.Error("Invalid timestamp format", zap.String("timestamp", timestamp))
-		return nil, errors.New("timestamp must be a valid timestamp in format 1234567890.123456")
+		return mcp.NewToolResultError("timestamp must be a valid timestamp in format 1234567890.123456"), nil
 	}
 
 	// Delete the message
@@ -231,7 +231,7 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	respChannel, respTimestamp, err := ch.apiProvider.Slack().DeleteMessageContext(ctx, channel, timestamp)
 	if err != nil {
 		ch.logger.Error("Slack DeleteMessageContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to delete message", err), nil
 	}
 
 	// Return a simple success message in CSV format
@@ -251,7 +251,7 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	csvBytes, err := gocsv.MarshalBytes(result)
 	if err != nil {
 		ch.logger.Error("Failed to marshal delete result to CSV", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to format delete result", err), nil
 	}
 
 	return mcp.NewToolResultText(string(csvBytes)), nil

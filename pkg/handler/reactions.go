@@ -42,12 +42,12 @@ func (rh *ReactionsHandler) ReactionsAddHandler(ctx context.Context, request mcp
 		if rh.logger != nil {
 			rh.logger.Error("Failed to parse add-reaction params", zap.Error(err))
 		}
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse reaction parameters", err), nil
 	}
 
 	// Check if reactions are enabled
 	if !rh.isReactionAllowed(params.channelID) {
-		return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable.")
+		return mcp.NewToolResultError("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable."), nil
 	}
 
 	// Create Slack item reference
@@ -67,7 +67,7 @@ func (rh *ReactionsHandler) ReactionsAddHandler(ctx context.Context, request mcp
 			if rh.logger != nil {
 				rh.logger.Error("Slack AddReactionContext failed", zap.Error(err))
 			}
-			return nil, err
+			return mcp.NewToolResultErrorFromErr("Failed to add reaction", err), nil
 		}
 		// Log but continue if already reacted
 		if rh.logger != nil {
@@ -92,14 +92,14 @@ func (rh *ReactionsHandler) ReactionsAddHandler(ctx context.Context, request mcp
 		if rh.logger != nil {
 			rh.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
 		}
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to fetch message after adding reaction", err), nil
 	}
 	if rh.logger != nil {
 		rh.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
 	}
 
 	if len(history.Messages) == 0 {
-		return nil, fmt.Errorf("message not found after adding reaction")
+		return mcp.NewToolResultError("message not found after adding reaction"), nil
 	}
 
 	// Convert and return as CSV (same pattern as add message)
@@ -119,12 +119,12 @@ func (rh *ReactionsHandler) ReactionsRemoveHandler(ctx context.Context, request 
 		if rh.logger != nil {
 			rh.logger.Error("Failed to parse remove-reaction params", zap.Error(err))
 		}
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse reaction parameters", err), nil
 	}
 
 	// Check if reactions are enabled
 	if !rh.isReactionAllowed(params.channelID) {
-		return nil, fmt.Errorf("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable.")
+		return mcp.NewToolResultError("reaction tools are disabled for this channel. Set SLACK_MCP_ADD_REACTION_TOOL environment variable to enable."), nil
 	}
 
 	// Create Slack item reference
@@ -144,7 +144,7 @@ func (rh *ReactionsHandler) ReactionsRemoveHandler(ctx context.Context, request 
 			if rh.logger != nil {
 				rh.logger.Error("Slack RemoveReactionContext failed", zap.Error(err))
 			}
-			return nil, err
+			return mcp.NewToolResultErrorFromErr("Failed to remove reaction", err), nil
 		}
 		// Log but continue if no reaction exists
 		if rh.logger != nil {
@@ -169,14 +169,14 @@ func (rh *ReactionsHandler) ReactionsRemoveHandler(ctx context.Context, request 
 		if rh.logger != nil {
 			rh.logger.Error("GetConversationHistoryContext failed", zap.Error(err))
 		}
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to fetch message after adding reaction", err), nil
 	}
 	if rh.logger != nil {
 		rh.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
 	}
 
 	if len(history.Messages) == 0 {
-		return nil, fmt.Errorf("message not found after removing reaction")
+		return mcp.NewToolResultError("message not found after removing reaction"), nil
 	}
 
 	// Convert and return as CSV (same pattern as add message)

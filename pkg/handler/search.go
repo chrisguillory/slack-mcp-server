@@ -67,7 +67,7 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 	params, err := sh.parseParamsToolSearch(request)
 	if err != nil {
 		sh.logger.Error("Failed to parse search params", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to parse search parameters", err), nil
 	}
 	sh.logger.Debug("Search params parsed", zap.String("query", params.query), zap.Int("limit", params.limit), zap.Int("page", params.page))
 
@@ -81,7 +81,7 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 	messagesRes, _, err := sh.apiProvider.Slack().SearchContext(ctx, params.query, searchParams)
 	if err != nil {
 		sh.logger.Error("Slack SearchContext failed", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to search messages", err), nil
 	}
 	sh.logger.Debug("Search completed", zap.Int("matches", len(messagesRes.Matches)))
 
@@ -97,7 +97,7 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 	// Build result with metadata at the beginning (similar to channels_list and users_list)
 	csvBytes, err := marshalSearchMessagesToCSVBytes(messages)
 	if err != nil {
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to format search results", err), nil
 	}
 
 	var result strings.Builder

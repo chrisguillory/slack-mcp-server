@@ -110,7 +110,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 
 	if ready, err := ch.apiProvider.IsReady(); !ready {
 		ch.logger.Error("API provider not ready", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
 	}
 
 	query := request.GetString("query", "")
@@ -297,7 +297,7 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 	// Write headers
 	if err := writer.Write(headers); err != nil {
 		ch.logger.Error("Failed to write CSV headers", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to format channel results", err), nil
 	}
 
 	// Write data rows
@@ -319,14 +319,14 @@ func (ch *ChannelsHandler) ChannelsHandler(ctx context.Context, request mcp.Call
 		}
 		if err := writer.Write(row); err != nil {
 			ch.logger.Error("Failed to write CSV row", zap.Error(err))
-			return nil, err
+			return mcp.NewToolResultErrorFromErr("Failed to format channel results", err), nil
 		}
 	}
 
 	writer.Flush()
 	if err := writer.Error(); err != nil {
 		ch.logger.Error("CSV writer error", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to format channel results", err), nil
 	}
 
 	// Build result with metadata at the beginning

@@ -46,7 +46,7 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 
 	if ready, err := uh.apiProvider.IsReady(); !ready {
 		uh.logger.Error("API provider not ready", zap.Error(err))
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
 	}
 
 	// Get parameters with defaults

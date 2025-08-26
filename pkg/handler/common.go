@@ -22,7 +22,7 @@ func getBotInfo(botID string) (userName, realName string, ok bool) {
 func marshalMessagesToCSV(messages []Message) (*mcp.CallToolResult, error) {
 	csvBytes, err := gocsv.MarshalBytes(&messages)
 	if err != nil {
-		return nil, err
+		return mcp.NewToolResultErrorFromErr("Failed to format messages as CSV", err), nil
 	}
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
