@@ -182,6 +182,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.DefaultString("msgID,userUser,realName,channelID,text,time"),
 			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'permalink'. Use 'all' for all fields. Default excludes 'permalink' for token efficiency."),
 		),
+		mcp.WithString("sort",
+			mcp.DefaultString("relevance"),
+			mcp.Description("Sort order for search results. Options: 'relevance' (default, by search score), 'chronological' (oldest first by timestamp). Default: 'relevance'"),
+		),
 	), searchHandler.SearchMessagesHandler)
 
 	s.AddTool(mcp.NewTool("channels_list",

@@ -48,6 +48,7 @@ type searchParams struct {
 	query string
 	limit int
 	page  int
+	sort  string
 }
 
 // SearchMessage is like Message but without Cursor field (cursor is in metadata)
@@ -72,11 +73,21 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 		sh.logger.Error("Failed to parse search params", zap.Error(err))
 		return mcp.NewToolResultErrorFromErr("Failed to parse search parameters", err), nil
 	}
-	sh.logger.Debug("Search params parsed", zap.String("query", params.query), zap.Int("limit", params.limit), zap.Int("page", params.page))
+	sh.logger.Debug("Search params parsed", zap.String("query", params.query), zap.Int("limit", params.limit), zap.Int("page", params.page), zap.String("sort", params.sort))
+
+	// Configure sort parameters based on user choice
+	var sortField, sortDir string
+	if params.sort == "chronological" {
+		sortField = "timestamp"
+		sortDir = "asc" // Oldest first
+	} else {
+		sortField = slack.DEFAULT_SEARCH_SORT   // "score"
+		sortDir = slack.DEFAULT_SEARCH_SORT_DIR // "desc"
+	}
 
 	searchParams := slack.SearchParameters{
-		Sort:          slack.DEFAULT_SEARCH_SORT,
-		SortDirection: slack.DEFAULT_SEARCH_SORT_DIR,
+		Sort:          sortField,
+		SortDirection: sortDir,
 		Highlight:     false,
 		Count:         params.limit,
 		Page:          params.page,
@@ -231,6 +242,7 @@ func (sh *SearchHandler) parseParamsToolSearch(req mcp.CallToolRequest) (*search
 	finalQuery := buildQuery(freeText, filters)
 	limit := req.GetInt("limit", 100)
 	cursor := req.GetString("cursor", "")
+	sort := req.GetString("sort", "relevance")
 
 	var (
 		page          int
@@ -260,11 +272,13 @@ func (sh *SearchHandler) parseParamsToolSearch(req mcp.CallToolRequest) (*search
 		zap.String("query", finalQuery),
 		zap.Int("limit", limit),
 		zap.Int("page", page),
+		zap.String("sort", sort),
 	)
 	return &searchParams{
 		query: finalQuery,
 		limit: limit,
 		page:  page,
+		sort:  sort,
 	}, nil
 }
 
