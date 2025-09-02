@@ -2,9 +2,6 @@
 
 ## 🆕 New Tools to Add
 
-### Message Management
-- [ ] `chat_update` - Edit/update existing messages (uses chat.update API)
-
 ### Channel Information
 - [ ] `conversations_members` - List channel members (uses conversations.members API)
 

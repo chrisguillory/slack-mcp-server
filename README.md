@@ -135,6 +135,26 @@ Remove an emoji reaction from a message
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
+### 9. chat_delete_message:
+Delete a message from a channel
+
+> **Note:** Deleting messages is disabled by default for safety. To enable, set the `SLACK_MCP_DELETE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, deletion is enabled only for those specific channels. See the Environment Variables section below for details.
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
+
+### 10. chat_update_message:
+Edit/update an existing message in a channel
+
+> **Note:** Updating messages is disabled by default for safety. To enable, set the `SLACK_MCP_UPDATE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, updating is enabled only for those specific channels. See the Environment Variables section below for details.
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
+  - `payload` (string, required): New message content in specified content_type format
+  - `content_type` (string, default: "text/markdown"): Content type of the message. Allowed values: 'text/markdown', 'text/plain'
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:
@@ -187,6 +207,8 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
 | `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `chat_post_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
 | `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `reactions_add` and `reactions_remove` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_DELETE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message deletion via `chat_delete_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_UPDATE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message updating via `chat_update_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `chat_post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |

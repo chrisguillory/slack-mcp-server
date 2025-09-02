@@ -5,7 +5,8 @@
       "Bash(make test:*)",
       "Bash(make build:*)",
       "WebSearch",
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "mcp__perplexity__perplexity_ask"
     ],
     "deny": [],
     "ask": []

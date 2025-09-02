@@ -257,6 +257,152 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
+// ChatUpdateHandler updates an existing message and returns it as CSV
+func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ChatUpdateHandler called", zap.Any("params", request.Params))
+
+	// Check if update-message tool is enabled
+	toolConfig := os.Getenv("SLACK_MCP_UPDATE_MESSAGE_TOOL")
+	if toolConfig == "" {
+		ch.logger.Error("Update-message tool disabled by default")
+		return mcp.NewToolResultError(
+			"by default, the chat_update_message tool is disabled to prevent accidental message modification. " +
+				"To enable it, set the SLACK_MCP_UPDATE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
+				"to limit where the MCP can update messages, e.g. 'SLACK_MCP_UPDATE_MESSAGE_TOOL=C1234567890,D0987654321', " +
+				"'SLACK_MCP_UPDATE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_UPDATE_MESSAGE_TOOL=true' for all channels and DMs",
+		), nil
+	}
+
+	// Get and validate channel_id
+	channel := request.GetString("channel_id", "")
+	if channel == "" {
+		ch.logger.Error("channel_id missing in update-message params")
+		return mcp.NewToolResultError("channel_id must be provided"), nil
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channel, "#") || strings.HasPrefix(channel, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channel]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channel))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channel)), nil
+		}
+		channel = channelsMaps.Channels[chn].ID
+	}
+
+	// Check if channel is allowed for updates
+	if !isChannelAllowedForUpdate(channel) {
+		ch.logger.Warn("Update-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
+		return mcp.NewToolResultError(fmt.Sprintf("chat_update_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
+	}
+
+	// Get and validate timestamp
+	timestamp := request.GetString("timestamp", "")
+	if timestamp == "" {
+		ch.logger.Error("timestamp missing in update-message params")
+		return mcp.NewToolResultError("timestamp must be provided"), nil
+	}
+	if !strings.Contains(timestamp, ".") {
+		ch.logger.Error("Invalid timestamp format", zap.String("timestamp", timestamp))
+		return mcp.NewToolResultError("timestamp must be a valid timestamp in format 1234567890.123456"), nil
+	}
+
+	// Get the new text/payload
+	payload := request.GetString("payload", "")
+	if payload == "" {
+		ch.logger.Error("payload missing in update-message params")
+		return mcp.NewToolResultError("payload must be provided"), nil
+	}
+
+	// Get content type
+	contentType := request.GetString("content_type", "text/markdown")
+
+	// Prepare update options
+	var options []slack.MsgOption
+	switch contentType {
+	case "text/plain":
+		options = append(options, slack.MsgOptionText(payload, false))
+	case "text/markdown":
+		blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(payload)
+		if err != nil {
+			ch.logger.Warn("Markdown parsing error, falling back to plain text", zap.Error(err))
+			options = append(options, slack.MsgOptionText(payload, false))
+		} else {
+			options = append(options, slack.MsgOptionBlocks(blocks...))
+		}
+	default:
+		return mcp.NewToolResultError("content_type must be either 'text/plain' or 'text/markdown'"), nil
+	}
+
+	// Update the message
+	ch.logger.Debug("Updating Slack message",
+		zap.String("channel", channel),
+		zap.String("timestamp", timestamp),
+		zap.String("content_type", contentType),
+	)
+
+	respChannel, respTimestamp, _, err := ch.apiProvider.Slack().UpdateMessageContext(ctx, channel, timestamp, options...)
+	if err != nil {
+		ch.logger.Error("Slack UpdateMessageContext failed", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to update message", err), nil
+	}
+
+	// Fetch the updated message to return it
+	historyParams := slack.GetConversationHistoryParameters{
+		ChannelID: respChannel,
+		Latest:    respTimestamp,
+		Limit:     1,
+		Inclusive: true,
+	}
+	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
+	if err != nil {
+		ch.logger.Error("GetConversationHistoryContext failed after update", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to fetch updated message", err), nil
+	}
+
+	if len(history.Messages) == 0 {
+		ch.logger.Error("No message found after update", zap.String("channel", respChannel), zap.String("timestamp", respTimestamp))
+		return mcp.NewToolResultError("Updated message not found"), nil
+	}
+
+	// Convert message to CSV format
+	messages := ch.convertMessagesFromHistory(history.Messages, respChannel, false)
+	csvBytes, err := marshalMessagesToCSVBytes(messages)
+	if err != nil {
+		ch.logger.Error("Failed to marshal updated message to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format updated message", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
+}
+
+func isChannelAllowedForUpdate(channel string) bool {
+	config := os.Getenv("SLACK_MCP_UPDATE_MESSAGE_TOOL")
+	if config == "" {
+		return false
+	}
+	if config == "true" || config == "1" {
+		return true
+	}
+	items := strings.Split(config, ",")
+	isNegated := strings.HasPrefix(strings.TrimSpace(items[0]), "!")
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if isNegated {
+			item = strings.TrimPrefix(item, "!")
+			if item == channel {
+				return false
+			}
+		} else {
+			if item == channel {
+				return true
+			}
+		}
+	}
+	return isNegated
+}
+
 func isChannelAllowed(channel string) bool {
 	config := os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL")
 	if config == "" || config == "true" || config == "1" {

@@ -138,6 +138,22 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
 	), chatHandler.ChatDeleteMessageHandler)
 
+	// Update message tool
+	s.AddTool(mcp.NewTool("chat_update_message",
+		mcp.WithDescription("Edit/update an existing message in a channel"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("payload",
+			mcp.Required(),
+			mcp.Description("New message content in specified content_type format")),
+		mcp.WithString("content_type",
+			mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'")),
+	), chatHandler.ChatUpdateHandler)
+
 	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
 		mcp.WithString("search_query",

@@ -90,6 +90,7 @@ type SlackAPI interface {
 
 	// Message management
 	DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error)
+	UpdateMessageContext(ctx context.Context, channel, timestamp string, options ...slack.MsgOption) (string, string, string, error)
 }
 
 type MCPSlackClient struct {
@@ -302,6 +303,11 @@ func (c *MCPSlackClient) RemoveReactionContext(ctx context.Context, name string,
 func (c *MCPSlackClient) DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error) {
 	// chat.delete is only available via standard API
 	return c.slackClient.DeleteMessageContext(ctx, channel, messageTimestamp)
+}
+
+func (c *MCPSlackClient) UpdateMessageContext(ctx context.Context, channel, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
+	// chat.update is only available via standard API
+	return c.slackClient.UpdateMessageContext(ctx, channel, timestamp, options...)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {
