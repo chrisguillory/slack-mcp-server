@@ -280,7 +280,7 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("channel_id must be provided"), nil
 	}
 
-	// Handle channel name resolution
+	// Handle channel name resolution and user ID to DM conversation ID conversion
 	if strings.HasPrefix(channel, "#") || strings.HasPrefix(channel, "@") {
 		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
 		chn, ok := channelsMaps.ChannelsInv[channel]
@@ -289,6 +289,17 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channel)), nil
 		}
 		channel = channelsMaps.Channels[chn].ID
+	} else if strings.HasPrefix(channel, "U") {
+		// User IDs are not valid for message updates - need DM conversation ID
+		ch.logger.Error("Invalid channel format - user ID provided instead of DM conversation ID",
+			zap.String("user_id", channel))
+		return mcp.NewToolResultError(
+			fmt.Sprintf("Invalid channel_id format: %s appears to be a user ID. "+
+				"To update messages in DMs, use the DM conversation ID (starts with 'D') "+
+				"instead of the user ID (starts with 'U'). "+
+				"You can find the DM conversation ID in the channel_id field of messages from that DM.",
+				channel),
+		), nil
 	}
 
 	// Check if channel is allowed for updates

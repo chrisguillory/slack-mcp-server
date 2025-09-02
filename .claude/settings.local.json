@@ -7,7 +7,11 @@
       "WebSearch",
       "Bash(go doc:*)",
       "mcp__perplexity__perplexity_ask",
-      "Read(/Users/chris/monorepo/**)"
+      "Read(/Users/chris/monorepo/**)",
+      "Bash(go test:*)",
+      "Bash(go get:*)",
+      "Bash(go list:*)",
+      "Bash(go fmt:*)"
     ],
     "deny": [],
     "ask": []

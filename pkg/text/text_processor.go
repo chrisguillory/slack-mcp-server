@@ -176,7 +176,7 @@ func TimestampToIsoRFC3339(slackTS string) (string, error) {
 func ProcessText(s string) string {
 	// Process special formatting (links, etc.) but don't remove any characters
 	s = processLinks(s)
-	
+
 	// Prevent CSV injection by prepending a single quote to strings that start with dangerous characters
 	// This preserves the content while preventing formula execution in spreadsheets
 	// Using single quote as it's less visible than tab and is the standard Excel approach
@@ -487,19 +487,18 @@ func processLinks(text string) string {
 	// Handle Slack-style links: <URL|Description>
 	slackLinkRegex := regexp.MustCompile(`<(https?://[^>|]+)\|([^>]+)>`)
 	text = slackLinkRegex.ReplaceAllString(text, "$1 - $2")
-	
+
 	// Handle markdown links: [Description](URL)
 	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)]+)\)`)
 	text = markdownLinkRegex.ReplaceAllString(text, "$2 - $1")
-	
+
 	// Handle HTML links (if any)
 	htmlLinkRegex := regexp.MustCompile(`<a\s+href=["']([^"']+)["'][^>]*>([^<]+)</a>`)
 	text = htmlLinkRegex.ReplaceAllString(text, "$1 - $2")
-	
+
 	// Normalize multiple spaces to single space
 	spaceRegex := regexp.MustCompile(`\s+`)
 	text = spaceRegex.ReplaceAllString(text, " ")
-	
+
 	return strings.TrimSpace(text)
 }
-
