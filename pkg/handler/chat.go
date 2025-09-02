@@ -315,8 +315,8 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("payload must be provided"), nil
 	}
 
-	// Get content type
-	contentType := request.GetString("content_type", "text/markdown")
+	// Get content type (default to plain text for updates to avoid block_mismatch errors)
+	contentType := request.GetString("content_type", "text/plain")
 
 	// Prepare update options
 	var options []slack.MsgOption

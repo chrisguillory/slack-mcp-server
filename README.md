@@ -167,7 +167,7 @@ Edit/update an existing message
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `payload` (string, required): New message content in specified content_type format
-  - `content_type` (string, default: "text/markdown"): Content type of the message. Allowed values: 'text/markdown', 'text/plain'
+  - `content_type` (string, default: "text/plain"): Content type of the message. Allowed values: 'text/plain', 'text/markdown'. Use 'text/plain' for simple text updates to avoid block_mismatch errors.
 
 ### 12. get_current_user
 Get information about the authenticated user

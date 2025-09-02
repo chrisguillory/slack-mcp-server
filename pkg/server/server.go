@@ -156,7 +156,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Required(),
 			mcp.Description("New message content in specified content_type format")),
 		mcp.WithString("content_type",
-			mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'")),
+			mcp.Description("Content type of the message. Default is 'text/plain' to avoid block_mismatch errors. Allowed values: 'text/plain', 'text/markdown'. Note: Use 'text/plain' for simple text updates, 'text/markdown' only if the original message used blocks.")),
 	), chatHandler.ChatUpdateHandler)
 
 	s.AddTool(mcp.NewTool("search_messages",
