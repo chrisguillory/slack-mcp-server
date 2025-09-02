@@ -77,10 +77,18 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 
 	// Configure sort parameters based on user choice
 	var sortField, sortDir string
-	if params.sort == "chronological" {
+	switch params.sort {
+	case "newest_first":
+		sortField = "timestamp"
+		sortDir = "desc" // Newest first
+	case "oldest_first":
 		sortField = "timestamp"
 		sortDir = "asc" // Oldest first
-	} else {
+	case "relevance":
+		sortField = "score"
+		sortDir = "desc" // Most relevant first
+	default:
+		// Default to relevance sorting
 		sortField = slack.DEFAULT_SEARCH_SORT   // "score"
 		sortDir = slack.DEFAULT_SEARCH_SORT_DIR // "desc"
 	}

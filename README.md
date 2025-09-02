@@ -79,6 +79,7 @@ Search for messages across channels and DMs
   - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
   - `limit` (number, default: 100): The maximum number of items to return. Must be an integer between 1 and 100.
   - `fields` (string, default: "msgID,userUser,realName,channelID,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`, `permalink`. Use `all` for all fields. Default excludes `permalink` for token efficiency. To include message permalinks, add `permalink` to the fields list.
+  - `sort` (string, default: "relevance"): Sort order for search results. Options: `relevance` (by search score), `newest_first` (by timestamp, most recent first), `oldest_first` (by timestamp, oldest first).
 - **Response Format:**
   The response includes metadata comments at the beginning:
   - `# Total messages: X` - Total number of messages matching the search criteria

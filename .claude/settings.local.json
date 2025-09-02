@@ -6,7 +6,8 @@
       "Bash(make build:*)",
       "WebSearch",
       "Bash(go doc:*)",
-      "mcp__perplexity__perplexity_ask"
+      "mcp__perplexity__perplexity_ask",
+      "Read(/Users/chris/monorepo/**)"
     ],
     "deny": [],
     "ask": []

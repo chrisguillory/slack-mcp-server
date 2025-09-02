@@ -205,7 +205,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 		mcp.WithString("sort",
 			mcp.DefaultString("relevance"),
-			mcp.Description("Sort order for search results. Options: 'relevance' (default, by search score), 'chronological' (oldest first by timestamp). Default: 'relevance'"),
+			mcp.Description("Sort order for search results. Options: 'relevance' (default, by search score), 'newest_first' (by timestamp, most recent first), 'oldest_first' (by timestamp, oldest first). Default: 'relevance'"),
 		),
 	), searchHandler.SearchMessagesHandler)
 
