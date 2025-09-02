@@ -38,9 +38,14 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	emojiHandler := handler.NewEmojiHandler(provider, logger)
 	channelsHandler := handler.NewChannelsHandler(provider, logger)
 	usersHandler := handler.NewUsersHandler(provider, logger)
+	authHandler := handler.NewAuthHandler(provider, logger)
 
-	s.AddTool(mcp.NewTool("conversations_history",
-		mcp.WithDescription("Get messages from the channel (or DM) by channel_id, the last row/column in the response is used as 'cursor' parameter for pagination if not empty"),
+	s.AddTool(mcp.NewTool("get_current_user",
+		mcp.WithDescription("Get information about the authenticated user (Slack API: auth.test)"),
+	), authHandler.GetCurrentUserHandler)
+
+	s.AddTool(mcp.NewTool("get_channel_messages",
+		mcp.WithDescription("Get messages from a channel or DM (Slack API: conversations.history)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("    - `channel_id` (string): ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
@@ -58,8 +63,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ConversationsHistoryHandler)
 
-	s.AddTool(mcp.NewTool("conversations_replies",
-		mcp.WithDescription("Get a thread of messages posted to a conversation by channelID and thread_ts, the last row/column in the response is used as 'cursor' parameter for pagination if not empty"),
+	s.AddTool(mcp.NewTool("get_thread_messages",
+		mcp.WithDescription("Get messages from a thread (Slack API: conversations.replies)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
@@ -81,8 +86,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), conversationsHandler.ConversationsRepliesHandler)
 
-	s.AddTool(mcp.NewTool("chat_post_message",
-		mcp.WithDescription("Post a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts."),
+	s.AddTool(mcp.NewTool("post_message",
+		mcp.WithDescription("Post a message to a channel or DM (Slack API: chat.postMessage)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
@@ -100,8 +105,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), chatHandler.ChatPostMessageHandler)
 
 	// Add reaction tool
-	s.AddTool(mcp.NewTool("reactions_add",
-		mcp.WithDescription("Add an emoji reaction to a message"),
+	s.AddTool(mcp.NewTool("add_reaction",
+		mcp.WithDescription("Add an emoji reaction to a message (Slack API: reactions.add)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
@@ -114,8 +119,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), reactionsHandler.ReactionsAddHandler)
 
 	// Remove reaction tool
-	s.AddTool(mcp.NewTool("reactions_remove",
-		mcp.WithDescription("Remove an emoji reaction from a message"),
+	s.AddTool(mcp.NewTool("remove_reaction",
+		mcp.WithDescription("Remove an emoji reaction from a message (Slack API: reactions.remove)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
@@ -128,8 +133,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), reactionsHandler.ReactionsRemoveHandler)
 
 	// Delete message tool
-	s.AddTool(mcp.NewTool("chat_delete_message",
-		mcp.WithDescription("Delete a message from a channel"),
+	s.AddTool(mcp.NewTool("delete_message",
+		mcp.WithDescription("Delete a message from a channel (Slack API: chat.delete)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
@@ -139,8 +144,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), chatHandler.ChatDeleteMessageHandler)
 
 	// Update message tool
-	s.AddTool(mcp.NewTool("chat_update_message",
-		mcp.WithDescription("Edit/update an existing message in a channel"),
+	s.AddTool(mcp.NewTool("update_message",
+		mcp.WithDescription("Edit/update an existing message (Slack API: chat.update)"),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
@@ -155,7 +160,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), chatHandler.ChatUpdateHandler)
 
 	s.AddTool(mcp.NewTool("search_messages",
-		mcp.WithDescription("Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required."),
+		mcp.WithDescription("Search for messages across channels and DMs (Slack API: search.messages)"),
 		mcp.WithString("search_query",
 			mcp.Description("Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored."),
 		),
@@ -204,8 +209,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), searchHandler.SearchMessagesHandler)
 
-	s.AddTool(mcp.NewTool("channels_list",
-		mcp.WithDescription("Get list of channels"),
+	s.AddTool(mcp.NewTool("list_channels",
+		mcp.WithDescription("List channels, DMs, and group DMs (Slack API: conversations.list)"),
 		mcp.WithString("query",
 			mcp.Description("Search for channels by name. Searches in channel name, topic, and purpose (case-insensitive)"),
 		),
@@ -233,8 +238,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), channelsHandler.ChannelsHandler)
 
-	s.AddTool(mcp.NewTool("users_list",
-		mcp.WithDescription("Get list of users in the workspace"),
+	s.AddTool(mcp.NewTool("list_users",
+		mcp.WithDescription("List users in the workspace (Slack API: users.list)"),
 		mcp.WithString("query",
 			mcp.Description("Search for users by name. Searches in username, real name, and display name (case-insensitive)"),
 		),
@@ -263,8 +268,8 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), usersHandler.UsersHandler)
 
-	s.AddTool(mcp.NewTool("emoji_list",
-		mcp.WithDescription("Get list of available emojis/reactions in the workspace"),
+	s.AddTool(mcp.NewTool("list_emojis",
+		mcp.WithDescription("List available emojis/reactions (Slack API: emoji.list)"),
 		mcp.WithString("query",
 			mcp.Description("Search for emojis by name (case-insensitive)"),
 		),

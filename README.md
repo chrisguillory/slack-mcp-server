@@ -17,7 +17,7 @@ This feature-rich Slack MCP Server has:
 - **Channel and Thread Support with `#Name` `@Lookup`**: Fetch messages from channels and threads, including activity messages, and retrieve channels using their names (e.g., #general) as well as their IDs.
 - **Smart History**: Fetch messages with pagination by date (d1, 7d, 1m) or message count.
 - **Search Messages**: Search messages in channels, threads, and DMs using various filters like date, user, and content.
-- **Safe Message Posting**: The `chat_post_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
+- **Safe Message Posting**: The `post_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
 - **DM and Group DM support**: Retrieve direct messages and group direct messages.
 - **Embedded user information**: Embed user information in messages, for better context.
 - **Cache support**: Cache users and channels for faster access.
@@ -33,38 +33,38 @@ This feature-rich Slack MCP Server has:
 
 ## Tools
 
-### 1. conversations_history:
-Get messages from the channel (or DM) by channel_id, the last row/column in the response is used as 'cursor' parameter for pagination if not empty
+### 1. get_channel_messages
+Get messages from a channel or DM
 - **Parameters:**
-  - `channel_id` (string, required):     - `channel_id` (string): ID of the channel in format Cxxxxxxxxxx or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
+  - `channel_id` (string, required): ID of the channel in format Cxxxxxxxxxx or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
   - `include_activity_messages` (boolean, default: false): If true, the response will include activity messages such as `channel_join` or `channel_leave`. Default is boolean false.
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
   - `limit` (string, default: "1d"): Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided.
   - `fields` (string, default: "msgID,userUser,realName,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`. Use `all` for all fields. Default optimizes for common use cases while reducing token usage.
 
-### 2. conversations_replies:
-Get a thread of messages posted to a conversation by channelID and `thread_ts`, the last row/column in the response is used as `cursor` parameter for pagination if not empty.
+### 2. get_thread_messages
+Get messages from a thread
 - **Parameters:**
   - `channel_id` (string, required): ID of the channel in format `Cxxxxxxxxxx` or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
-  - `thread_ts` (string, required): Unique identifier of either a thread’s parent message or a message in the thread. ts must be the timestamp in format `1234567890.123456` of an existing message with 0 or more replies.
+  - `thread_ts` (string, required): Unique identifier of either a thread's parent message or a message in the thread. ts must be the timestamp in format `1234567890.123456` of an existing message with 0 or more replies.
   - `include_activity_messages` (boolean, default: false): If true, the response will include activity messages such as 'channel_join' or 'channel_leave'. Default is boolean false.
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
   - `limit` (string, default: "1d"): Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided.
   - `fields` (string, default: "msgID,userUser,realName,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`. Use `all` for all fields. Default optimizes for common use cases while reducing token usage.
 
-### 3. chat_post_message
-Post a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts.
+### 3. post_message
+Post a message to a channel or DM
 
 > **Note:** Posting messages is disabled by default for safety. To enable, set the `SLACK_MCP_ADD_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, posting is enabled only for those specific channels. See the Environment Variables section below for details.
 
 - **Parameters:**
   - `channel_id` (string, required): ID of the channel in format `Cxxxxxxxxxx` or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
-  - `thread_ts` (string, optional): Unique identifier of either a thread’s parent message or a message in the thread_ts must be the timestamp in format `1234567890.123456` of an existing message with 0 or more replies. Optional, if not provided the message will be added to the channel itself, otherwise it will be added to the thread.
+  - `thread_ts` (string, optional): Unique identifier of either a thread's parent message or a message in the thread_ts must be the timestamp in format `1234567890.123456` of an existing message with 0 or more replies. Optional, if not provided the message will be added to the channel itself, otherwise it will be added to the thread.
   - `payload` (string, required): Message payload in specified content_type format. Example: 'Hello, world!' for text/plain or '# Hello, world!' for text/markdown.
   - `content_type` (string, default: "text/markdown"): Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'.
 
 ### 4. search_messages
-Search messages in a public channel, private channel, or direct message (DM, or IM) conversation using filters. All filters are optional, if not provided then search_query is required.
+Search for messages across channels and DMs
 - **Parameters:**
   - `search_query` (string, optional): Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored.
   - `filter_in_channel` (string, optional): Filter messages in a specific channel by its ID or name. Example: `C1234567890` or `#general`. If not provided, all channels will be searched.
@@ -89,8 +89,8 @@ Search messages in a public channel, private channel, or direct message (DM, or 
   - `# Item range: A-B` - Range of items in the current page (when available)
   - `# Next cursor: C` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 5. channels_list:
-Get list of channels with search, filtering, and optimized field selection for token efficiency
+### 5. list_channels
+List channels, DMs, and group DMs
 - **Parameters:**
   - `query` (string, optional): Search for channels by name. Searches in channel name, topic, and purpose (case-insensitive)
   - `channel_types` (string, required): Comma-separated channel types. Allowed values: `mpim`, `im`, `public_channel`, `private_channel`. Example: `public_channel,private_channel,im`
@@ -105,8 +105,8 @@ Get list of channels with search, filtering, and optimized field selection for t
   - `# Returned in this page: Y` - Number of channels in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 6. users_list:
-Get list of users in the workspace with flexible filtering, search, and field selection
+### 6. list_users
+List users in the workspace
 - **Parameters:**
   - `query` (string, optional): Search for users by name. Searches in username, real name, and display name (case-insensitive)
   - `filter` (string, default: "all"): Filter users by status: `all`, `active`, `deleted`, `bots`, `humans`, `admins`. Default: `all`
@@ -121,21 +121,34 @@ Get list of users in the workspace with flexible filtering, search, and field se
   - `# Returned in this page: Y` - Number of users in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 7. reactions_add:
+### 7. list_emojis
+List available emojis/reactions
+- **Parameters:**
+  - `query` (string, optional): Search for emojis by name (case-insensitive)
+  - `type` (string, default: "all"): Filter by emoji type: `all`, `custom`, `unicode`. Default: `all`
+  - `limit` (number, default: 1000): The maximum number of items to return. Must be an integer between 1 and 1000. Default: 1000
+  - `cursor` (string, optional): Cursor for pagination. Use the cursor value returned from the previous request.
+- **Response Format:**
+  The response includes metadata comments at the beginning:
+  - `# Total emojis: X` - Total number of emojis matching the filter criteria
+  - `# Returned in this page: Y` - Number of emojis in this response
+  - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
+
+### 8. add_reaction
 Add an emoji reaction to a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
-### 8. reactions_remove:
+### 9. remove_reaction
 Remove an emoji reaction from a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
-### 9. chat_delete_message:
+### 10. delete_message
 Delete a message from a channel
 
 > **Note:** Deleting messages is disabled by default for safety. To enable, set the `SLACK_MCP_DELETE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, deletion is enabled only for those specific channels. See the Environment Variables section below for details.
@@ -144,8 +157,8 @@ Delete a message from a channel
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
 
-### 10. chat_update_message:
-Edit/update an existing message in a channel
+### 11. update_message
+Edit/update an existing message
 
 > **Note:** Updating messages is disabled by default for safety. To enable, set the `SLACK_MCP_UPDATE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, updating is enabled only for those specific channels. See the Environment Variables section below for details.
 
@@ -155,39 +168,34 @@ Edit/update an existing message in a channel
   - `payload` (string, required): New message content in specified content_type format
   - `content_type` (string, default: "text/markdown"): Content type of the message. Allowed values: 'text/markdown', 'text/plain'
 
+### 12. get_current_user
+Get information about the authenticated user
+
+- **Parameters:** None
+- **Response Format:**
+  Returns CSV with the following fields:
+  - `user_id`: Unique identifier of the authenticated user
+  - `user_name`: Username of the authenticated user
+  - `team_id`: Unique identifier of the workspace/team
+  - `team_name`: Name of the workspace/team
+  - `workspace_url`: Full URL of the workspace
+  - `enterprise_id`: Enterprise Grid ID (if applicable)
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:
 
 ### 1. `slack://<workspace>/channels` — Directory of Channels
 
-Fetches a CSV directory of all channels in the workspace, including public channels, private channels, DMs, and group DMs.
-
-- **URI:** `slack://<workspace>/channels`
-- **Format:** `text/csv`
-- **Fields:**
-  - `id`: Channel ID (e.g., `C1234567890`)
-  - `name`: Channel name (e.g., `#general`, `@username_dm`)
-  - `topic`: Channel topic (if any)
-  - `purpose`: Channel purpose/description
-  - `memberCount`: Number of members in the channel
+A CSV file containing all accessible channels in your workspace. This resource provides a quick way to explore channel structure and membership information without making individual API calls.
 
 ### 2. `slack://<workspace>/users` — Directory of Users
 
-Fetches a CSV directory of all users in the workspace.
+A CSV file containing all users in your workspace. This includes both active and deactivated users, along with their basic profile information.
 
-- **URI:** `slack://<workspace>/users`
-- **Format:** `text/csv`
-- **Fields:**
-  - `userID`: User ID (e.g., `U1234567890`)
-  - `userName`: Slack username (e.g., `john`)
-  - `realName`: User’s real name (e.g., `John Doe`)
+## Installation & Configuration
 
-## Setup Guide
-
-- [Authentication Setup](docs/01-authentication-setup.md)
-- [Installation](docs/02-installation.md)
-- [Configuration and Usage](docs/03-configuration-and-usage.md)
+See the project documentation for detailed installation and configuration instructions.
 
 ### Environment Variables (Quick Reference)
 
@@ -205,11 +213,11 @@ Fetches a CSV directory of all users in the workspace.
 | `SLACK_MCP_SERVER_CA`             | No        | `nil`                     | Path to CA certificate                                                                                                                                                                                                                                                                    |
 | `SLACK_MCP_SERVER_CA_TOOLKIT`     | No        | `nil`                     | Inject HTTPToolkit CA certificate to root trust-store for MitM debugging                                                                                                                                                                                                                  |
 | `SLACK_MCP_SERVER_CA_INSECURE`    | No        | `false`                   | Trust all insecure requests (NOT RECOMMENDED)                                                                                                                                                                                                                                             |
-| `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `chat_post_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
-| `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `reactions_add` and `reactions_remove` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
-| `SLACK_MCP_DELETE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message deletion via `chat_delete_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
-| `SLACK_MCP_UPDATE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message updating via `chat_update_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
-| `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `chat_post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
+| `SLACK_MCP_ADD_MESSAGE_TOOL`      | No        | `nil`                     | Enable message posting via `post_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones, while an empty value disables posting by default. |
+| `SLACK_MCP_ADD_REACTION_TOOL`     | No        | `nil`                     | Enable reaction management via `add_reaction` and `remove_reaction` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_DELETE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message deletion via `delete_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_UPDATE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message updating via `update_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
+| `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `.channels_cache_v2.json` | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup.                                                                                                                                                                          |
@@ -222,8 +230,8 @@ Fetches a CSV directory of all users in the workspace.
 
 | Users Cache        | Channels Cache     | Limitations                                                                                                                                                                                                                                                                                                                                        |
 |--------------------|--------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| :x:                | :x:                | No cache, No LLM context enhancement with user data, tools `channels_list` and `users_list` will be fully not functional. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `@userHandle` or `#channel-name`, getting messages by `@userHandle` or `#channel-name` won't be available either. |
-| :white_check_mark: | :x:                | No channels cache, tool `channels_list` will be fully not functional. Tool `users_list` will work. Tools `conversations_*` will have limited capabilities and you won't be able to search messages by `#channel-name`, getting messages by `#channel-name` won't be available either.                                                          |
+| :x:                | :x:                | No cache, No LLM context enhancement with user data, tools `list_channels` and `list_users` will be fully not functional. Tools `get_channel_messages` and `get_thread_messages` will have limited capabilities and you won't be able to search messages by `@userHandle` or `#channel-name`, getting messages by `@userHandle` or `#channel-name` won't be available either. |
+| :white_check_mark: | :x:                | No channels cache, tool `list_channels` will be fully not functional. Tool `list_users` will work. Tools `get_channel_messages` and `get_thread_messages` will have limited capabilities and you won't be able to search messages by `#channel-name`, getting messages by `#channel-name` won't be available either.                                                          |
 | :white_check_mark: | :white_check_mark: | No limitations, fully functional Slack MCP Server with all tools operational.                                                                                                                                                                                                                                                                      |
 
 ### Debugging Tools
@@ -231,16 +239,4 @@ Fetches a CSV directory of all users in the workspace.
 ```bash
 # Run the inspector with stdio transport
 npx @modelcontextprotocol/inspector go run mcp/mcp-server.go --transport stdio
-
-# View logs
-tail -n 20 -f ~/Library/Logs/Claude/mcp*.log
 ```
-
-## Security
-
-- Never share API tokens
-- Keep .env files secure and private
-
-## License
-
-Licensed under MIT - see [LICENSE](LICENSE) file. This is not an official Slack product.

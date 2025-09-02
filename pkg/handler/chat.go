@@ -119,7 +119,7 @@ func (ch *ChatHandler) parseParamsToolAddMessage(request mcp.CallToolRequest) (*
 	if toolConfig == "" {
 		ch.logger.Error("Add-message tool disabled by default")
 		return nil, errors.New(
-			"by default, the chat_post_message tool is disabled to guard Slack workspaces against accidental spamming." +
+			"by default, the post_message tool is disabled to guard Slack workspaces against accidental spamming." +
 				"To enable it, set the SLACK_MCP_ADD_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels" +
 				"to limit where the MCP can post messages, e.g. 'SLACK_MCP_ADD_MESSAGE_TOOL=C1234567890,D0987654321', 'SLACK_MCP_ADD_MESSAGE_TOOL=!C1234567890'" +
 				"to enable all except one or 'SLACK_MCP_ADD_MESSAGE_TOOL=true' for all channels and DMs",
@@ -142,7 +142,7 @@ func (ch *ChatHandler) parseParamsToolAddMessage(request mcp.CallToolRequest) (*
 	}
 	if !isChannelAllowed(channel) {
 		ch.logger.Warn("Add-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
-		return nil, fmt.Errorf("chat_post_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
+		return nil, fmt.Errorf("post_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
 	}
 
 	threadTs := request.GetString("thread_ts", "")
@@ -180,7 +180,7 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	if toolConfig == "" {
 		ch.logger.Error("Delete-message tool disabled by default")
 		return mcp.NewToolResultError(
-			"by default, the chat_delete_message tool is disabled to prevent accidental message deletion. " +
+			"by default, the delete_message tool is disabled to prevent accidental message deletion. " +
 				"To enable it, set the SLACK_MCP_DELETE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
 				"to limit where the MCP can delete messages, e.g. 'SLACK_MCP_DELETE_MESSAGE_TOOL=C1234567890,D0987654321', " +
 				"'SLACK_MCP_DELETE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_DELETE_MESSAGE_TOOL=true' for all channels and DMs",
@@ -208,7 +208,7 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	// Check if channel is allowed for deletion
 	if !isChannelAllowedForDeletion(channel) {
 		ch.logger.Warn("Delete-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
-		return mcp.NewToolResultError(fmt.Sprintf("chat_delete_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("delete_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
 	}
 
 	// Get and validate timestamp
@@ -266,7 +266,7 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 	if toolConfig == "" {
 		ch.logger.Error("Update-message tool disabled by default")
 		return mcp.NewToolResultError(
-			"by default, the chat_update_message tool is disabled to prevent accidental message modification. " +
+			"by default, the update_message tool is disabled to prevent accidental message modification. " +
 				"To enable it, set the SLACK_MCP_UPDATE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
 				"to limit where the MCP can update messages, e.g. 'SLACK_MCP_UPDATE_MESSAGE_TOOL=C1234567890,D0987654321', " +
 				"'SLACK_MCP_UPDATE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_UPDATE_MESSAGE_TOOL=true' for all channels and DMs",
@@ -294,7 +294,7 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 	// Check if channel is allowed for updates
 	if !isChannelAllowedForUpdate(channel) {
 		ch.logger.Warn("Update-message tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
-		return mcp.NewToolResultError(fmt.Sprintf("chat_update_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
+		return mcp.NewToolResultError(fmt.Sprintf("update_message tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
 	}
 
 	// Get and validate timestamp
