@@ -159,7 +159,7 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 			continue
 		}
 
-		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments)
+		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments) + text.BlocksToText(msg.Blocks)
 
 		messages = append(messages, SearchMessage{
 			MsgID:     msg.Timestamp,
