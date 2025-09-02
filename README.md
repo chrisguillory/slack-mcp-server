@@ -40,6 +40,7 @@ Get messages from the channel (or DM) by channel_id, the last row/column in the 
   - `include_activity_messages` (boolean, default: false): If true, the response will include activity messages such as `channel_join` or `channel_leave`. Default is boolean false.
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
   - `limit` (string, default: "1d"): Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided.
+  - `fields` (string, default: "msgID,userUser,realName,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`. Use `all` for all fields. Default optimizes for common use cases while reducing token usage.
 
 ### 2. conversations_replies:
 Get a thread of messages posted to a conversation by channelID and `thread_ts`, the last row/column in the response is used as `cursor` parameter for pagination if not empty.
@@ -49,6 +50,7 @@ Get a thread of messages posted to a conversation by channelID and `thread_ts`, 
   - `include_activity_messages` (boolean, default: false): If true, the response will include activity messages such as 'channel_join' or 'channel_leave'. Default is boolean false.
   - `cursor` (string, optional): Cursor for pagination. Use the value of the last row and column in the response as next_cursor field returned from the previous request.
   - `limit` (string, default: "1d"): Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided.
+  - `fields` (string, default: "msgID,userUser,realName,text,time"): Comma-separated list of fields to return. Options: `msgID`, `userID`, `userUser`, `realName`, `channelID`, `threadTs`, `text`, `time`, `reactions`. Use `all` for all fields. Default optimizes for common use cases while reducing token usage.
 
 ### 3. chat_post_message
 Post a message to a public channel, private channel, or direct message (DM, or IM) conversation by channel_id and thread_ts.

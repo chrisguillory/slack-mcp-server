@@ -78,6 +78,11 @@ func (ch *ConversationsHandler) ConversationsHistoryHandler(ctx context.Context,
 		zap.Bool("include_activity", params.activity),
 	)
 
+	// Parse fields parameter
+	fields := request.GetString("fields", "msgID,userUser,realName,text,time")
+	requestedFields := parseMessageFields(fields)
+	ch.logger.Debug("Requested fields", zap.Any("fields", requestedFields))
+
 	historyParams := slack.GetConversationHistoryParameters{
 		ChannelID: params.channel,
 		Limit:     params.limit,
@@ -94,12 +99,18 @@ func (ch *ConversationsHandler) ConversationsHistoryHandler(ctx context.Context,
 
 	ch.logger.Debug("Fetched conversation history", zap.Int("message_count", len(history.Messages)))
 
-	messages := ch.convertMessagesFromHistory(history.Messages, params.channel, params.activity)
+	messages := ch.convertMessagesFromHistoryWithFields(history.Messages, params.channel, params.activity, requestedFields)
 
-	if len(messages) > 0 && history.HasMore {
+	if len(messages) > 0 && history.HasMore && requestedFields["cursor"] {
 		messages[len(messages)-1].Cursor = history.ResponseMetaData.NextCursor
 	}
-	return marshalMessagesToCSV(messages)
+
+	// Use field-aware marshaling
+	csvBytes, err := marshalMessagesWithFields(messages, requestedFields, true)
+	if err != nil {
+		return mcp.NewToolResultErrorFromErr("Failed to format messages as CSV", err), nil
+	}
+	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
 // ConversationsRepliesHandler streams thread replies as CSV
@@ -117,6 +128,11 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 		return mcp.NewToolResultError("thread_ts must be provided"), nil
 	}
 
+	// Parse fields parameter
+	fields := request.GetString("fields", "msgID,userUser,realName,text,time")
+	requestedFields := parseMessageFields(fields)
+	ch.logger.Debug("Requested fields", zap.Any("fields", requestedFields))
+
 	repliesParams := slack.GetConversationRepliesParameters{
 		ChannelID: params.channel,
 		Timestamp: threadTs,
@@ -126,18 +142,22 @@ func (ch *ConversationsHandler) ConversationsRepliesHandler(ctx context.Context,
 		Cursor:    params.cursor,
 		Inclusive: false,
 	}
-	replies, hasMore, nextCursor, err := ch.apiProvider.Slack().GetConversationRepliesContext(ctx, &repliesParams)
+	replies, _, _, err := ch.apiProvider.Slack().GetConversationRepliesContext(ctx, &repliesParams)
 	if err != nil {
 		ch.logger.Error("GetConversationRepliesContext failed", zap.Error(err))
 		return mcp.NewToolResultErrorFromErr("Failed to fetch conversation replies", err), nil
 	}
 	ch.logger.Debug("Fetched conversation replies", zap.Int("count", len(replies)))
 
-	messages := ch.convertMessagesFromHistory(replies, params.channel, params.activity)
-	if len(messages) > 0 && hasMore {
-		messages[len(messages)-1].Cursor = nextCursor
+	messages := ch.convertMessagesFromHistoryWithFields(replies, params.channel, params.activity, requestedFields)
+
+	// Note: cursor field is not applicable for replies, so we pass false for includeCursor
+	// Use field-aware marshaling
+	csvBytes, err := marshalMessagesWithFields(messages, requestedFields, false)
+	if err != nil {
+		return mcp.NewToolResultErrorFromErr("Failed to format messages as CSV", err), nil
 	}
-	return marshalMessagesToCSV(messages)
+	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
 // UsersResource streams a CSV of all users
@@ -173,40 +193,74 @@ func (ch *ConversationsHandler) UsersResource(ctx context.Context, request mcp.R
 }
 
 func (ch *ConversationsHandler) convertMessagesFromHistory(slackMessages []slack.Message, channelID string, includeActivity bool) []Message {
+	// Default behavior - include all fields for backwards compatibility
+	allFields := make(map[string]bool)
+	for _, field := range []string{"msgID", "userID", "userUser", "realName", "channelID", "threadTs", "text", "time", "reactions"} {
+		allFields[field] = true
+	}
+	return ch.convertMessagesFromHistoryWithFields(slackMessages, channelID, includeActivity, allFields)
+}
+
+func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessages []slack.Message, channelID string, includeActivity bool, fields map[string]bool) []Message {
 	var messages []Message
 	warn := false
+
+	// Check which fields we need to optimize
+	needUserLookup := fields["userUser"] || fields["realName"]
+	needReactions := fields["reactions"]
+	needText := fields["text"]
+	needTime := fields["time"]
 
 	for _, msg := range slackMessages {
 		if (msg.SubType != "" && msg.SubType != "bot_message") && !includeActivity {
 			continue
 		}
 
-		parsedReactions := ch.parseReactions(msg.Reactions)
-
-		userName, realName, ok := getUserInfo(msg.User, ch.apiProvider.ProvideUsersMap().Users)
-
-		if !ok && msg.SubType == "bot_message" {
-			userName, realName, ok = getBotInfo(msg.Username)
+		// Only parse reactions if requested
+		var parsedReactions string
+		if needReactions {
+			parsedReactions = ch.parseReactions(msg.Reactions)
 		}
 
-		if !ok {
-			warn = true
+		// Only do user lookups if username or real name requested
+		var userName, realName string
+		var ok bool
+		if needUserLookup {
+			userName, realName, ok = getUserInfo(msg.User, ch.apiProvider.ProvideUsersMap().Users)
+
+			if !ok && msg.SubType == "bot_message" {
+				userName, realName, ok = getBotInfo(msg.Username)
+			}
+
+			if !ok {
+				warn = true
+			}
 		}
 
-		timestamp, err := text.TimestampToIsoRFC3339(msg.Timestamp)
-		if err != nil {
-			ch.logger.Error("Failed to convert timestamp to RFC3339", zap.Error(err))
-			continue
+		// Only convert timestamp if time field requested
+		var timestamp string
+		if needTime {
+			var err error
+			timestamp, err = text.TimestampToIsoRFC3339(msg.Timestamp)
+			if err != nil {
+				ch.logger.Error("Failed to convert timestamp to RFC3339", zap.Error(err))
+				continue
+			}
 		}
 
-		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments) + text.BlocksToText(msg.Blocks)
+		// Only process text with blocks if text field requested
+		var msgText string
+		if needText {
+			msgText = msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments) + text.BlocksToText(msg.Blocks)
+			msgText = text.ProcessText(msgText)
+		}
 
 		messages = append(messages, Message{
 			MsgID:     msg.Timestamp,
 			UserID:    msg.User,
 			UserName:  userName,
 			RealName:  realName,
-			Text:      text.ProcessText(msgText),
+			Text:      msgText,
 			Channel:   channelID,
 			ThreadTs:  msg.ThreadTimestamp,
 			Time:      timestamp,
