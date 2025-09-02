@@ -174,7 +174,18 @@ func TimestampToIsoRFC3339(slackTS string) (string, error) {
 }
 
 func ProcessText(s string) string {
-	s = filterSpecialChars(s)
+	// Process special formatting (links, etc.) but don't remove any characters
+	s = processLinks(s)
+	
+	// Prevent CSV injection by prepending a single quote to strings that start with dangerous characters
+	// This preserves the content while preventing formula execution in spreadsheets
+	// Using single quote as it's less visible than tab and is the standard Excel approach
+	if len(s) > 0 {
+		firstChar := s[0]
+		if firstChar == '=' || firstChar == '+' || firstChar == '-' || firstChar == '@' || firstChar == '\t' || firstChar == '\r' {
+			s = "'" + s
+		}
+	}
 
 	return s
 }
@@ -471,91 +482,24 @@ func extractFromTextBlockObject(textObj *slack.TextBlockObject) string {
 	return text
 }
 
-func filterSpecialChars(text string) string {
-	replaceWithCommaCheck := func(match []string, isLast bool) string {
-		var url, linkText string
-
-		if len(match) == 3 && strings.Contains(match[0], "|") {
-			url = match[1]
-			linkText = match[2]
-		} else if len(match) == 3 {
-			linkText = match[1]
-			url = match[2]
-		}
-
-		replacement := url + " - " + linkText
-
-		if !isLast {
-			replacement += ","
-		}
-
-		return replacement
-	}
-
-	// Helper function to check if this is the last link/element
-	isLastInText := func(original string, currentText string) bool {
-		linkPos := strings.LastIndex(currentText, original)
-		if linkPos == -1 {
-			return false
-		}
-		afterLink := strings.TrimSpace(currentText[linkPos+len(original):])
-		return afterLink == ""
-	}
-
+// processLinks handles Slack and Markdown link formatting without removing any characters
+func processLinks(text string) string {
 	// Handle Slack-style links: <URL|Description>
 	slackLinkRegex := regexp.MustCompile(`<(https?://[^>|]+)\|([^>]+)>`)
-	slackMatches := slackLinkRegex.FindAllStringSubmatch(text, -1)
-	for _, match := range slackMatches {
-		original := match[0]
-		isLast := isLastInText(original, text)
-		replacement := replaceWithCommaCheck(match, isLast)
-		text = strings.Replace(text, original, replacement, 1)
-	}
-
+	text = slackLinkRegex.ReplaceAllString(text, "$1 - $2")
+	
 	// Handle markdown links: [Description](URL)
 	markdownLinkRegex := regexp.MustCompile(`\[([^\]]+)\]\((https?://[^)]+)\)`)
-	markdownMatches := markdownLinkRegex.FindAllStringSubmatch(text, -1)
-	for _, match := range markdownMatches {
-		original := match[0]
-		isLast := isLastInText(original, text)
-		replacement := replaceWithCommaCheck(match, isLast)
-		text = strings.Replace(text, original, replacement, 1)
-	}
-
+	text = markdownLinkRegex.ReplaceAllString(text, "$2 - $1")
+	
+	// Handle HTML links (if any)
 	htmlLinkRegex := regexp.MustCompile(`<a\s+href=["']([^"']+)["'][^>]*>([^<]+)</a>`)
-	htmlMatches := htmlLinkRegex.FindAllStringSubmatch(text, -1)
-	for _, match := range htmlMatches {
-		original := match[0]
-		isLast := isLastInText(original, text)
-		url := match[1]
-		linkText := match[2]
-		replacement := url + " - " + linkText
-		if !isLast {
-			replacement += ","
-		}
-		text = strings.Replace(text, original, replacement, 1)
-	}
-
-	urlRegex := regexp.MustCompile(`https?://[^\s<>"{}|\\^` + "`" + `\[\]]+`)
-	urls := urlRegex.FindAllString(text, -1)
-
-	protected := text
-	for i, url := range urls {
-		placeholder := "___URL_PLACEHOLDER_" + string(rune(48+i)) + "___"
-		protected = strings.Replace(protected, url, placeholder, 1)
-	}
-
-	cleanRegex := regexp.MustCompile(`[^0-9\p{L}\p{M}\s\.\,\-_:/\?=&%]`)
-	cleaned := cleanRegex.ReplaceAllString(protected, "")
-
-	// Restore the URLs
-	for i, url := range urls {
-		placeholder := "___URL_PLACEHOLDER_" + string(rune(48+i)) + "___"
-		cleaned = strings.Replace(cleaned, placeholder, url, 1)
-	}
-
+	text = htmlLinkRegex.ReplaceAllString(text, "$1 - $2")
+	
+	// Normalize multiple spaces to single space
 	spaceRegex := regexp.MustCompile(`\s+`)
-	cleaned = spaceRegex.ReplaceAllString(cleaned, " ")
-
-	return strings.TrimSpace(cleaned)
+	text = spaceRegex.ReplaceAllString(text, " ")
+	
+	return strings.TrimSpace(text)
 }
+
