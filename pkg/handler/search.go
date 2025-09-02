@@ -303,33 +303,40 @@ func (sh *SearchHandler) paramFormatUser(raw string) (string, error) {
 			// For DMs, use the channel name (which is typically the username)
 			return fmt.Sprintf("@%s", dm.Name), nil
 		}
-		return "", fmt.Errorf("DM channel %q not found or not accessible. Please verify the channel ID or try using @username instead", raw)
+		return "", fmt.Errorf("DM channel %q not found or not accessible", raw)
 	}
 
 	// Handle user IDs (format: U...)
 	if strings.HasPrefix(raw, "U") {
 		u, ok := users.Users[raw]
 		if !ok {
-			return "", fmt.Errorf("user ID %q not found. Please verify the user exists and is accessible", raw)
+			return "", fmt.Errorf("user ID %q not found", raw)
 		}
 		return fmt.Sprintf("<@%s>", u.ID), nil
 	}
 
-	// Strip @ prefix if present
-	if strings.HasPrefix(raw, "<@") {
-		raw = raw[2:]
-	}
-	if strings.HasPrefix(raw, "@") {
-		raw = raw[1:]
+	// Handle already formatted user mentions (format: <@U...>)
+	if strings.HasPrefix(raw, "<@") && strings.HasSuffix(raw, ">") {
+		// Extract user ID from <@U1234567890> format
+		uid := raw[2 : len(raw)-1]
+		if _, ok := users.Users[uid]; ok {
+			return raw, nil // Already in correct format
+		}
+		return "", fmt.Errorf("user ID %q in mention format not found", uid)
 	}
 
-	// Look up by username
-	uid, ok := users.UsersInv[raw]
-	if !ok {
-		// Provide helpful error message with suggestions
-		return "", fmt.Errorf("username %q not found. Try using the full username, @username format, or the user/channel ID directly", raw)
+	// Handle explicit username references (format: @username)
+	if strings.HasPrefix(raw, "@") {
+		username := raw[1:] // Strip @ prefix
+		uid, ok := users.UsersInv[username]
+		if !ok {
+			return "", fmt.Errorf("user @%s not found", username)
+		}
+		return fmt.Sprintf("<@%s>", uid), nil
 	}
-	return fmt.Sprintf("<@%s>", uid), nil
+
+	// Reject plain text that doesn't match any expected format
+	return "", fmt.Errorf("invalid user format %q. Use @username (e.g., @chris.guillory), user ID (e.g., U0913K85LES), or DM channel ID (e.g., D09197076DB)", raw)
 }
 
 func (sh *SearchHandler) paramFormatChannel(raw string) (string, error) {
