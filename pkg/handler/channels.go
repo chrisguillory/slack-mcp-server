@@ -15,6 +15,7 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/server/auth"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/slack-go/slack"
 	"go.uber.org/zap"
 )
 
@@ -467,4 +468,170 @@ func paginateChannels(channels []provider.Channel, cursor string, limit int) ([]
 	)
 
 	return paged, nextCursor
+}
+
+// Member represents a channel/DM member
+type Member struct {
+	UserID   string `csv:"user_id"`
+	UserName string `csv:"user_name"`
+	RealName string `csv:"real_name"`
+	IsBot    bool   `csv:"is_bot"`
+	IsAdmin  bool   `csv:"is_admin"`
+	Status   string `csv:"status"`
+}
+
+// ListChannelMembersHandler lists members of a channel, MPIM, or DM
+func (ch *ChannelsHandler) ListChannelMembersHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ListChannelMembersHandler called", zap.Any("params", request.Params))
+
+	// Get channel_id parameter
+	channelID := request.GetString("channel_id", "")
+	if channelID == "" {
+		ch.logger.Error("channel_id missing in list_channel_members params")
+		return mcp.NewToolResultError("channel_id must be provided"), nil
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channelID, "#") || strings.HasPrefix(channelID, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channelID]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channelID))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channelID)), nil
+		}
+		channelID = channelsMaps.Channels[chn].ID
+	}
+
+	// Get pagination parameters
+	cursor := request.GetString("cursor", "")
+	limit := request.GetInt("limit", 100)
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	// Check if this is a 1:1 DM by checking our channel cache
+	channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+	channelInfo, exists := channelsMaps.Channels[channelID]
+
+	var userIDs []string
+	var nextCursor string
+
+	if exists && channelInfo.IsIM {
+		// This is a 1:1 DM - use conversations.info to get the two participants
+		ch.logger.Debug("Channel is a 1:1 DM, using conversations.info", zap.String("channel_id", channelID))
+
+		info, err := ch.apiProvider.Slack().GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+			ChannelID:         channelID,
+			IncludeLocale:     false,
+			IncludeNumMembers: false,
+		})
+		if err != nil {
+			ch.logger.Error("Failed to get conversation info", zap.String("channel_id", channelID), zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to get DM participants", err), nil
+		}
+
+		// For DMs, the User field contains the other user's ID
+		// We need to include both the current user and the other user
+		authResp, err := ch.apiProvider.Slack().AuthTestContext(ctx)
+		if err != nil {
+			ch.logger.Error("Failed to get current user", zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to get current user", err), nil
+		}
+
+		userIDs = []string{authResp.UserID}
+		if info.User != "" && info.User != authResp.UserID {
+			userIDs = append(userIDs, info.User)
+		}
+
+		ch.logger.Debug("DM participants retrieved",
+			zap.String("channel_id", channelID),
+			zap.Strings("user_ids", userIDs))
+	} else {
+		// This is a regular channel or MPIM - use conversations.members
+		ch.logger.Debug("Using conversations.members for channel/MPIM", zap.String("channel_id", channelID))
+
+		params := &slack.GetUsersInConversationParameters{
+			ChannelID: channelID,
+			Cursor:    cursor,
+			Limit:     limit,
+		}
+
+		var err error
+		userIDs, nextCursor, err = ch.apiProvider.Slack().GetUsersInConversationContext(ctx, params)
+		if err != nil {
+			ch.logger.Error("Failed to get channel members", zap.String("channel_id", channelID), zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to get channel members", err), nil
+		}
+
+		ch.logger.Debug("Channel members retrieved",
+			zap.String("channel_id", channelID),
+			zap.Int("count", len(userIDs)),
+			zap.String("next_cursor", nextCursor))
+	}
+
+	// Enrich user IDs with user details from cache
+	usersMap := ch.apiProvider.ProvideUsersMap()
+	members := make([]Member, 0, len(userIDs))
+
+	for _, userID := range userIDs {
+		user, exists := usersMap.Users[userID]
+		if !exists {
+			// User not in cache, create minimal entry
+			members = append(members, Member{
+				UserID:   userID,
+				UserName: "unknown",
+				RealName: "Unknown User",
+				IsBot:    false,
+				IsAdmin:  false,
+				Status:   "unknown",
+			})
+			continue
+		}
+
+		// Determine user status
+		status := "active"
+		if user.Deleted {
+			status = "deleted"
+		} else if user.IsBot {
+			status = "bot"
+		} else if user.IsRestricted {
+			status = "restricted"
+		} else if user.IsUltraRestricted {
+			status = "guest"
+		}
+
+		members = append(members, Member{
+			UserID:   user.ID,
+			UserName: user.Name,
+			RealName: user.RealName,
+			IsBot:    user.IsBot,
+			IsAdmin:  user.IsAdmin,
+			Status:   status,
+		})
+	}
+
+	// Convert to CSV
+	csvBytes, err := gocsv.MarshalBytes(&members)
+	if err != nil {
+		ch.logger.Error("Failed to marshal members to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format members as CSV", err), nil
+	}
+
+	// Build result with metadata at the beginning (as comments)
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("# Channel: %s\n", channelID))
+	result.WriteString(fmt.Sprintf("# Total members returned: %d\n", len(members)))
+	if nextCursor != "" {
+		result.WriteString(fmt.Sprintf("# Next cursor: %s\n", nextCursor))
+	} else {
+		result.WriteString("# Next cursor: (none - all members returned)\n")
+	}
+	result.Write(csvBytes)
+
+	ch.logger.Debug("Successfully retrieved channel members",
+		zap.String("channel_id", channelID),
+		zap.Int("member_count", len(members)),
+		zap.Bool("has_more", nextCursor != ""))
+
+	return mcp.NewToolResultText(result.String()), nil
 }

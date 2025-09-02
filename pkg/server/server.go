@@ -238,6 +238,21 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), channelsHandler.ChannelsHandler)
 
+	s.AddTool(mcp.NewTool("list_channel_members",
+		mcp.WithDescription("List members of a channel, DM, or group DM (Slack API: conversations.members, conversations.info)"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C..., D..., G...) or name (#general, @user_dm)"),
+		),
+		mcp.WithNumber("limit",
+			mcp.DefaultNumber(100),
+			mcp.Description("The maximum number of members to return. Must be an integer between 1 and 1000. Default: 100"),
+		),
+		mcp.WithString("cursor",
+			mcp.Description("Cursor for pagination. Use the cursor value returned from the previous request."),
+		),
+	), channelsHandler.ListChannelMembersHandler)
+
 	s.AddTool(mcp.NewTool("list_users",
 		mcp.WithDescription("List users in the workspace (Slack API: users.list)"),
 		mcp.WithString("query",

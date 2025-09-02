@@ -91,6 +91,10 @@ type SlackAPI interface {
 	// Message management
 	DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error)
 	UpdateMessageContext(ctx context.Context, channel, timestamp string, options ...slack.MsgOption) (string, string, string, error)
+
+	// Channel members
+	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
+	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 }
 
 type MCPSlackClient struct {
@@ -308,6 +312,35 @@ func (c *MCPSlackClient) DeleteMessageContext(ctx context.Context, channel, mess
 func (c *MCPSlackClient) UpdateMessageContext(ctx context.Context, channel, timestamp string, options ...slack.MsgOption) (string, string, string, error) {
 	// chat.update is only available via standard API
 	return c.slackClient.UpdateMessageContext(ctx, channel, timestamp, options...)
+}
+
+func (c *MCPSlackClient) GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error) {
+	// In Enterprise Grid with browser tokens, we need to use the Edge client
+	if c.isEnterprise && !c.isOAuth {
+		// Use Edge client's UsersList method
+		users, err := c.edgeClient.UsersList(ctx, params.ChannelID)
+		if err != nil {
+			return nil, "", err
+		}
+
+		// Extract user IDs from the User structs
+		userIDs := make([]string, 0, len(users))
+		for _, user := range users {
+			userIDs = append(userIDs, user.ID)
+		}
+
+		// Handle pagination if needed - Edge client handles it internally
+		// so we just return empty cursor for now
+		return userIDs, "", nil
+	}
+
+	// For non-Enterprise or OAuth tokens, use standard API
+	return c.slackClient.GetUsersInConversationContext(ctx, params)
+}
+
+func (c *MCPSlackClient) GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
+	// conversations.info is only available via standard API
+	return c.slackClient.GetConversationInfoContext(ctx, input)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {
