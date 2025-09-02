@@ -294,6 +294,15 @@ func (sh *SearchHandler) paramFormatUser(raw string) (string, error) {
 	users := sh.apiProvider.ProvideUsersMap()
 	raw = strings.TrimSpace(raw)
 
+	// Handle special "me" keyword for current user
+	if raw == "me" {
+		authResp, err := sh.apiProvider.Slack().AuthTestContext(context.Background())
+		if err != nil {
+			return "", fmt.Errorf("failed to get current user: %w", err)
+		}
+		return fmt.Sprintf("<@%s>", authResp.UserID), nil
+	}
+
 	// Handle DM channel IDs (format: D...)
 	if strings.HasPrefix(raw, "D") {
 		// For DM channels, we need to extract the user from the channel
