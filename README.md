@@ -182,6 +182,49 @@ Get information about the authenticated user
   - `workspace_url`: Full URL of the workspace
   - `enterprise_id`: Enterprise Grid ID (if applicable)
 
+### 13. list_channel_members
+List members of a channel, DM, or group DM
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `limit` (number, default: 1000): Maximum number of members to return (1-1000)
+  - `cursor` (string, optional): Pagination cursor from previous request
+- **Response Format:**
+  Returns CSV with metadata comments and the following fields:
+  - `user_id`: User ID of the member
+  - `username`: Username of the member
+  - `real_name`: Real name of the member
+  - `display_name`: Display name of the member
+  - `is_bot`: Whether the user is a bot
+  - `is_admin`: Whether the user is an admin
+  - `status_text`: User's status text
+  - `status_emoji`: User's status emoji
+- **Notes:**
+  - For 1:1 DMs, returns information about both participants
+  - For channels and group DMs, uses conversations.members API
+  - Supports Enterprise Grid workspaces with automatic fallback
+
+### 14. get_user_info
+Get detailed information about a specific user
+
+- **Parameters:**
+  - `user_id` (string, required): User ID (U...) or username (@username)
+  - `fields` (string, default: "id,name,real_name,display_name,email,title,status_text,is_admin,is_bot"): 
+    Comma-separated list of fields to return. Options include:
+    - Basic: `id`, `name`, `real_name`, `display_name`, `email`
+    - Status: `status_text`, `status_emoji`, `status_expiration`
+    - Profile: `title`, `phone`, `skype`, `first_name`, `last_name`
+    - Admin: `is_admin`, `is_owner`, `is_primary_owner`, `is_restricted`, `is_ultra_restricted`
+    - Bot: `is_bot`, `is_app_user`
+    - Timezone: `tz`, `tz_label`, `tz_offset`
+    - Presence: `presence` (online/away/dnd/offline)
+    - Use `all` to return all available fields
+- **Response Format:**
+  Returns CSV with requested fields as columns
+- **Notes:**
+  - Combines data from users.info and users.getPresence APIs
+  - Some fields may be empty depending on workspace permissions
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:

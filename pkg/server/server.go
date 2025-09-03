@@ -283,6 +283,18 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), usersHandler.UsersHandler)
 
+	s.AddTool(mcp.NewTool("get_user_info",
+		mcp.WithDescription("Get detailed information about a specific user (Slack API: users.info, users.getPresence)"),
+		mcp.WithString("user_id",
+			mcp.Required(),
+			mcp.Description("User ID (U...) or username (@username)"),
+		),
+		mcp.WithString("fields",
+			mcp.DefaultString("id,name,real_name,display_name,email,title,status_text,is_admin,is_bot"),
+			mcp.Description("Comma-separated list of fields to return. Options include: id, team_id, name, real_name, display_name, email, phone, title, status_text, status_emoji, tz, is_admin, is_bot, is_restricted, image_192, presence, and many more. Use 'extended' for common fields, 'all' for all available fields. Default: basic set of commonly used fields"),
+		),
+	), usersHandler.GetUserInfoHandler)
+
 	s.AddTool(mcp.NewTool("list_emojis",
 		mcp.WithDescription("List available emojis/reactions (Slack API: emoji.list)"),
 		mcp.WithString("query",

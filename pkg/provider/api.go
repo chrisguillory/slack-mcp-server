@@ -95,6 +95,10 @@ type SlackAPI interface {
 	// Channel members
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
 	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
+
+	// User information
+	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
+	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
 }
 
 type MCPSlackClient struct {
@@ -341,6 +345,17 @@ func (c *MCPSlackClient) GetUsersInConversationContext(ctx context.Context, para
 func (c *MCPSlackClient) GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error) {
 	// conversations.info is only available via standard API
 	return c.slackClient.GetConversationInfoContext(ctx, input)
+}
+
+func (c *MCPSlackClient) GetUserInfoContext(ctx context.Context, user string) (*slack.User, error) {
+	// In Enterprise Grid with browser tokens, we might need to use cached data
+	// For now, try the standard API first
+	return c.slackClient.GetUserInfoContext(ctx, user)
+}
+
+func (c *MCPSlackClient) GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error) {
+	// users.getPresence is only available via standard API
+	return c.slackClient.GetUserPresenceContext(ctx, user)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {

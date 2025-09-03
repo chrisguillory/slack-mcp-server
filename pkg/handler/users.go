@@ -373,3 +373,240 @@ func paginateUsers(users []slack.User, cursor string, limit int) ([]slack.User, 
 
 	return paged, nextCursor
 }
+
+// GetUserInfoHandler returns detailed information about a single user
+func (uh *UsersHandler) GetUserInfoHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	uh.logger.Debug("GetUserInfoHandler called", zap.Any("params", request.Params))
+
+	// Get user_id parameter
+	userID := request.GetString("user_id", "")
+	if userID == "" {
+		uh.logger.Error("user_id missing in get_user_info params")
+		return mcp.NewToolResultError("user_id must be provided"), nil
+	}
+
+	// Handle username resolution (@username)
+	if strings.HasPrefix(userID, "@") {
+		username := strings.TrimPrefix(userID, "@")
+		usersMap := uh.apiProvider.ProvideUsersMap()
+		if uid, ok := usersMap.UsersInv[username]; ok {
+			userID = uid
+		} else {
+			uh.logger.Error("User not found", zap.String("username", username))
+			return mcp.NewToolResultError(fmt.Sprintf("user @%s not found", username)), nil
+		}
+	}
+
+	// Get fields parameter
+	fieldsParam := request.GetString("fields", "id,name,real_name,display_name,email,title,status_text,is_admin,is_bot")
+
+	// Parse requested fields
+	requestedFields := make(map[string]bool)
+	if fieldsParam == "all" {
+		// Request all available fields
+		allFields := []string{
+			"id", "team_id", "name", "deleted", "color", "updated",
+			"real_name", "display_name", "display_name_normalized", "first_name", "last_name",
+			"email", "phone", "skype", "title", "pronouns", "start_date",
+			"status_text", "status_emoji", "status_expiration",
+			"tz", "tz_label", "tz_offset", "locale",
+			"is_admin", "is_owner", "is_primary_owner", "is_restricted", "is_ultra_restricted",
+			"is_bot", "is_app_user", "is_stranger", "is_invited_user", "is_email_confirmed", "has_2fa",
+			"avatar_hash", "image_24", "image_32", "image_48", "image_72", "image_192", "image_512",
+			"enterprise_id", "enterprise_name", "enterprise_user_id", "enterprise_is_admin", "enterprise_is_owner",
+			"presence", "online", "auto_away", "manual_away", "connection_count", "last_activity",
+			"always_active", "billing_active",
+		}
+		for _, field := range allFields {
+			requestedFields[field] = true
+		}
+	} else if fieldsParam == "extended" {
+		// Extended set of commonly used fields
+		extendedFields := []string{
+			"id", "team_id", "name", "real_name", "display_name", "email", "title",
+			"status_text", "status_emoji", "is_admin", "is_owner", "is_bot", "is_restricted",
+			"tz", "tz_label", "locale", "image_192",
+			"enterprise_id", "enterprise_name",
+		}
+		for _, field := range extendedFields {
+			requestedFields[field] = true
+		}
+	} else {
+		// Parse custom field list
+		for _, field := range strings.Split(fieldsParam, ",") {
+			field = strings.TrimSpace(field)
+			if field != "" {
+				requestedFields[field] = true
+			}
+		}
+	}
+
+	// Fetch user info from API
+	user, err := uh.apiProvider.Slack().GetUserInfoContext(ctx, userID)
+	if err != nil {
+		// If API fails, try to get from cache
+		uh.logger.Warn("Failed to get user from API, trying cache", zap.String("user_id", userID), zap.Error(err))
+		usersMap := uh.apiProvider.ProvideUsersMap()
+		if cachedUser, ok := usersMap.Users[userID]; ok {
+			user = &cachedUser
+		} else {
+			uh.logger.Error("Failed to get user info", zap.String("user_id", userID), zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to get user info", err), nil
+		}
+	}
+
+	// Fetch presence if requested
+	var presence *slack.UserPresence
+	if requestedFields["presence"] || requestedFields["online"] || requestedFields["auto_away"] ||
+		requestedFields["manual_away"] || requestedFields["connection_count"] || requestedFields["last_activity"] {
+		presence, err = uh.apiProvider.Slack().GetUserPresenceContext(ctx, userID)
+		if err != nil {
+			uh.logger.Warn("Failed to get user presence", zap.String("user_id", userID), zap.Error(err))
+			// Don't fail the whole request if presence fails
+		}
+	}
+
+	// Build CSV header and row based on requested fields
+	var headers []string
+	var values []string
+
+	// Helper function to add field if requested
+	addField := func(fieldName, value string) {
+		if requestedFields[fieldName] {
+			headers = append(headers, fieldName)
+			values = append(values, value)
+		}
+	}
+
+	// Add basic fields
+	addField("id", user.ID)
+	addField("team_id", user.TeamID)
+	addField("name", user.Name)
+	addField("deleted", fmt.Sprintf("%t", user.Deleted))
+	addField("color", user.Color)
+	addField("updated", fmt.Sprintf("%d", user.Updated))
+
+	// Add name fields
+	addField("real_name", user.RealName)
+	addField("display_name", user.Profile.DisplayName)
+	addField("display_name_normalized", user.Profile.DisplayNameNormalized)
+	addField("first_name", user.Profile.FirstName)
+	addField("last_name", user.Profile.LastName)
+
+	// Add contact fields
+	addField("email", user.Profile.Email)
+	addField("phone", user.Profile.Phone)
+	addField("skype", user.Profile.Skype)
+	addField("title", user.Profile.Title)
+	// Note: pronouns and start_date not available in current slack-go version
+	addField("pronouns", "")
+	addField("start_date", "")
+
+	// Add status fields
+	addField("status_text", user.Profile.StatusText)
+	addField("status_emoji", user.Profile.StatusEmoji)
+	addField("status_expiration", fmt.Sprintf("%d", user.Profile.StatusExpiration))
+
+	// Add timezone fields
+	addField("tz", user.TZ)
+	addField("tz_label", user.TZLabel)
+	addField("tz_offset", fmt.Sprintf("%d", user.TZOffset))
+	addField("locale", user.Locale)
+
+	// Add permission fields
+	addField("is_admin", fmt.Sprintf("%t", user.IsAdmin))
+	addField("is_owner", fmt.Sprintf("%t", user.IsOwner))
+	addField("is_primary_owner", fmt.Sprintf("%t", user.IsPrimaryOwner))
+	addField("is_restricted", fmt.Sprintf("%t", user.IsRestricted))
+	addField("is_ultra_restricted", fmt.Sprintf("%t", user.IsUltraRestricted))
+	addField("is_bot", fmt.Sprintf("%t", user.IsBot))
+	addField("is_app_user", fmt.Sprintf("%t", user.IsAppUser))
+	addField("is_stranger", fmt.Sprintf("%t", user.IsStranger))
+	addField("is_invited_user", fmt.Sprintf("%t", user.IsInvitedUser))
+
+	// Add security fields
+	// Note: IsEmailConfirmed not available in current slack-go version
+	addField("is_email_confirmed", "")
+	addField("has_2fa", fmt.Sprintf("%t", user.Has2FA))
+
+	// Add profile images
+	addField("avatar_hash", user.Profile.AvatarHash)
+	addField("image_24", user.Profile.Image24)
+	addField("image_32", user.Profile.Image32)
+	addField("image_48", user.Profile.Image48)
+	addField("image_72", user.Profile.Image72)
+	addField("image_192", user.Profile.Image192)
+	addField("image_512", user.Profile.Image512)
+
+	// Add enterprise fields
+	// EnterpriseUser is a struct, not a pointer, check if ID is set
+	if user.Enterprise.ID != "" {
+		addField("enterprise_id", user.Enterprise.EnterpriseID)
+		addField("enterprise_name", user.Enterprise.EnterpriseName)
+		addField("enterprise_user_id", user.Enterprise.ID)
+		addField("enterprise_is_admin", fmt.Sprintf("%t", user.Enterprise.IsAdmin))
+		addField("enterprise_is_owner", fmt.Sprintf("%t", user.Enterprise.IsOwner))
+	} else {
+		addField("enterprise_id", "")
+		addField("enterprise_name", "")
+		addField("enterprise_user_id", "")
+		addField("enterprise_is_admin", "false")
+		addField("enterprise_is_owner", "false")
+	}
+
+	// Add presence fields if fetched
+	if presence != nil {
+		addField("presence", presence.Presence)
+		addField("online", fmt.Sprintf("%t", presence.Online))
+		addField("auto_away", fmt.Sprintf("%t", presence.AutoAway))
+		addField("manual_away", fmt.Sprintf("%t", presence.ManualAway))
+		addField("connection_count", fmt.Sprintf("%d", presence.ConnectionCount))
+		addField("last_activity", fmt.Sprintf("%d", presence.LastActivity))
+	} else {
+		// Add empty values if presence wasn't fetched
+		addField("presence", "")
+		addField("online", "")
+		addField("auto_away", "")
+		addField("manual_away", "")
+		addField("connection_count", "")
+		addField("last_activity", "")
+	}
+
+	// Bot-specific fields
+	// Note: AlwaysActive not available in current slack-go version
+	addField("always_active", "")
+
+	// Build CSV output
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+
+	// Write headers
+	if err := writer.Write(headers); err != nil {
+		uh.logger.Error("Failed to write CSV headers", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format user info", err), nil
+	}
+
+	// Write values
+	if err := writer.Write(values); err != nil {
+		uh.logger.Error("Failed to write CSV values", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format user info", err), nil
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		uh.logger.Error("CSV writer error", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format user info", err), nil
+	}
+
+	// Build result with metadata
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("# User: %s (%s)\n", user.RealName, user.ID))
+	result.WriteString(fmt.Sprintf("# Fields returned: %d\n", len(headers)))
+	result.WriteString(buf.String())
+
+	uh.logger.Debug("Successfully retrieved user info",
+		zap.String("user_id", user.ID),
+		zap.Int("field_count", len(headers)))
+
+	return mcp.NewToolResultText(result.String()), nil
+}
