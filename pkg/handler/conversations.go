@@ -212,7 +212,20 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 	needTime := fields["time"]
 
 	for _, msg := range slackMessages {
-		if (msg.SubType != "" && msg.SubType != "bot_message") && !includeActivity {
+		// Skip activity messages unless specifically requested
+		// Common message subtypes that should be included:
+		// - "" (regular message)
+		// - "bot_message" (bot posts)
+		// - "thread_broadcast" (thread messages sent to channel)
+		// - "me_message" (/me commands)
+		// - "file_share" (file uploads)
+		isActivityMessage := msg.SubType != "" &&
+			msg.SubType != "bot_message" &&
+			msg.SubType != "thread_broadcast" &&
+			msg.SubType != "me_message" &&
+			msg.SubType != "file_share"
+
+		if isActivityMessage && !includeActivity {
 			continue
 		}
 
