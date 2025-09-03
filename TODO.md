@@ -2,24 +2,21 @@
 
 ## Phase 1: Essential Operations (Do First)
 
-1. **File upload** - Critical for sharing content
-2. **File list/info** - View and manage files
-3. **Create channel** - Essential workspace management
-4. **Archive channel** - Lifecycle management
-5. **Schedule message** - Time-based communications
+- **File upload** - Critical for sharing content
+- **File list/info** - View and manage files
+- **Schedule message** - Time-based communications
 
 ## Phase 2: Enhanced Organization
 
-6. **Pin/unpin messages** - Content highlighting
-7. **Add/list bookmarks** - Resource organization
-8. **Set channel topic/purpose** - Metadata management
-9. **Invite users to channel** - Membership management
+- **Pin/unpin messages** - Content highlighting
+- **Add/list bookmarks** - Resource organization
+- **Invite users to channel** - Membership management
 
 ## Phase 3: Productivity Features
 
-10. **Add/list reminders** - Task management
-11. **Set/clear user status** - Presence management
-12. **List scheduled messages** - Scheduled message management
+- **Add/list reminders** - Task management
+- **Set/clear user status** - Presence management
+- **List scheduled messages** - Scheduled message management
 
 ## Things to Skip (For Now)
 
