@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"runtime/trace"
@@ -198,20 +197,12 @@ func (cl *Client) CreateConversation(ctx context.Context, channelName string, is
 		return nil, err
 	}
 
-	// Debug: Let's see the raw response body first
-	respBodyBytes, _ := io.ReadAll(resp.Body)
-	fmt.Printf("DEBUG: Raw response body: %s\n", string(respBodyBytes))
-
-	// Reset the body for ParseResponse
-	resp.Body = io.NopCloser(bytes.NewReader(respBodyBytes))
-
 	var r ConversationsCreateResponse
+
 	if err := cl.ParseResponse(&r, resp); err != nil {
 		return nil, err
 	}
 
-	// Debug logging to see what we actually got - use standard logging
-	fmt.Printf("DEBUG: Edge client response - ok=%v, error=%v, channel_id=%v, channel_name=%v\n", r.Ok, r.Error, r.Channel.ID, r.Channel.Name)
 	trace.Logf(ctx, "response", "ok=%v, error=%v, channel_id=%v, channel_name=%v", r.Ok, r.Error, r.Channel.ID, r.Channel.Name)
 
 	// Check if the API call failed
