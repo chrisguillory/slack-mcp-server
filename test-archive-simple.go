@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strings"
 )
 
 func main() {
@@ -28,37 +27,21 @@ func main() {
 	tests := []struct {
 		name                  string
 		includeCSRF           bool
-		includeXFields        bool
 		includeAllQueryParams bool
 	}{
 		{
-			name:                  "1. Minimal - Just token and channel",
+			name:                  "1. Baseline - Just like slack-go/slack (token + channel)",
 			includeCSRF:           false,
-			includeXFields:        false,
 			includeAllQueryParams: false,
 		},
 		{
-			name:                  "2. With X fields (_x_mode, _x_sonic, _x_app_name)",
-			includeCSRF:           false,
-			includeXFields:        true,
-			includeAllQueryParams: false,
-		},
-		{
-			name:                  "3. With CSRF tokens in URL",
+			name:                  "2. Add CSRF tokens only",
 			includeCSRF:           true,
-			includeXFields:        false,
 			includeAllQueryParams: false,
 		},
 		{
-			name:                  "4. With CSRF + X fields",
+			name:                  "3. Add all query parameters from curl",
 			includeCSRF:           true,
-			includeXFields:        true,
-			includeAllQueryParams: false,
-		},
-		{
-			name:                  "5. Full - All parameters from curl",
-			includeCSRF:           true,
-			includeXFields:        true,
 			includeAllQueryParams: true,
 		},
 	}
@@ -83,24 +66,11 @@ func main() {
 	for _, test := range tests {
 		log.Printf("\n=== Test: %s ===", test.name)
 
-		// Build multipart body
-		var body bytes.Buffer
-		writer := multipart.NewWriter(&body)
-		boundary := "----WebKitFormBoundaryjzabKc1Q45vmDLXb"
-		writer.SetBoundary(boundary)
-
-		// Always include token and channel
-		writer.WriteField("token", xoxcToken)
-		writer.WriteField("channel", channelID)
-
-		// Optionally add X fields
-		if test.includeXFields {
-			writer.WriteField("_x_mode", "online")
-			writer.WriteField("_x_sonic", "true")
-			writer.WriteField("_x_app_name", "client")
+		// Build form data (URL-encoded, not multipart) - exactly like slack-go/slack
+		formData := url.Values{
+			"token":   {xoxcToken},
+			"channel": {channelID},
 		}
-
-		writer.Close()
 
 		// Build URL
 		baseURL := "https://mainstayio.enterprise.slack.com/api/conversations.archive"
@@ -115,16 +85,15 @@ func main() {
 			}
 		}
 
-		req, err := http.NewRequest("POST", baseURL, &body)
+		// Create request with URL-encoded form data
+		req, err := http.NewRequest("POST", baseURL, strings.NewReader(formData.Encode()))
 		if err != nil {
 			log.Printf("   ❌ Error creating request: %v", err)
 			continue
 		}
 
-		// Set headers
-		req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
-		req.Header.Set("Origin", "https://app.slack.com")
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36")
+		// Set headers - minimal, like slack-go/slack would
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 		// Make request
 		resp, err := httpClient.Do(req)
@@ -148,45 +117,41 @@ func main() {
 		// Check result
 		if ok, _ := result["ok"].(bool); ok {
 			log.Printf("   ✅ SUCCESS! Channel archived")
-			log.Printf("   Minimum requirements found: %s", test.name)
+			log.Printf("   👉 Minimum requirements: %s", test.name)
 
-			// Try to unarchive for next test
-			unarchiveChannel(httpClient, xoxcToken, channelID, test.includeCSRF, xID, xCSID, test.includeXFields, test.includeAllQueryParams)
-			break
+			// Unarchive for next test
+			unarchiveChannel(httpClient, xoxcToken, channelID, test.includeCSRF, xID, xCSID, test.includeAllQueryParams)
+
+			// Continue testing to see if simpler approaches also work
+			log.Printf("   📝 Continuing to test simpler approaches...")
 		} else {
 			errorMsg := result["error"]
 			log.Printf("   ❌ Failed with error: %v", errorMsg)
 
-			// If it's already archived, unarchive and retry
-			if errorMsg == "already_archived" {
-				log.Printf("   ℹ️  Channel already archived, unarchiving and retrying...")
-				if unarchiveChannel(httpClient, xoxcToken, channelID, test.includeCSRF, xID, xCSID, test.includeXFields, test.includeAllQueryParams) {
-					// Retry the archive with same parameters
-					log.Printf("   🔄 Retrying archive after unarchive...")
-					// Would need to duplicate the request here, skipping for brevity
+			// Special handling for specific errors
+			if errorMsg == "invalid_auth" {
+				log.Printf("   💡 Needs authentication - likely missing cookies or tokens")
+			} else if errorMsg == "not_authed" {
+				log.Printf("   💡 Not authenticated - token not being accepted")
+			} else if errorMsg == "already_archived" {
+				log.Printf("   ℹ️  Channel already archived, unarchiving...")
+				if unarchiveChannel(httpClient, xoxcToken, channelID, true, xID, xCSID, true) {
+					log.Printf("   🔄 Retrying archive...")
+					// Simplified retry - just show it would work
 				}
 			}
 		}
 	}
+
+	log.Printf("\n📊 Summary: Testing complete")
 }
 
-func unarchiveChannel(httpClient *http.Client, token, channelID string, includeCSRF bool, xID, xCSID string, includeXFields bool, includeAllQueryParams bool) bool {
-	// Build multipart body for unarchive
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	boundary := "----WebKitFormBoundaryjzabKc1Q45vmDLXb"
-	writer.SetBoundary(boundary)
-
-	writer.WriteField("token", token)
-	writer.WriteField("channel", channelID)
-
-	if includeXFields {
-		writer.WriteField("_x_mode", "online")
-		writer.WriteField("_x_sonic", "true")
-		writer.WriteField("_x_app_name", "client")
+func unarchiveChannel(httpClient *http.Client, token, channelID string, includeCSRF bool, xID, xCSID string, includeAllQueryParams bool) bool {
+	// Build form data (URL-encoded)
+	formData := url.Values{
+		"token":   {token},
+		"channel": {channelID},
 	}
-
-	writer.Close()
 
 	// Build URL
 	baseURL := "https://mainstayio.enterprise.slack.com/api/conversations.unarchive"
@@ -199,10 +164,8 @@ func unarchiveChannel(httpClient *http.Client, token, channelID string, includeC
 		}
 	}
 
-	req, _ := http.NewRequest("POST", baseURL, &body)
-	req.Header.Set("Content-Type", "multipart/form-data; boundary="+boundary)
-	req.Header.Set("Origin", "https://app.slack.com")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36")
+	req, _ := http.NewRequest("POST", baseURL, strings.NewReader(formData.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
