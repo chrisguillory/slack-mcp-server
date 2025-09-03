@@ -650,20 +650,32 @@ func (ch *ChannelsHandler) CreateChannelHandler(ctx context.Context, request mcp
 	isPrivate := request.GetBool("is_private", false)
 	topic := request.GetString("topic", "")
 	purpose := request.GetString("purpose", "")
+	workspace := request.GetString("workspace", "") // Optional workspace Team ID
 
 	ch.logger.Debug("Creating channel",
 		zap.String("name", name),
 		zap.Bool("is_private", isPrivate),
 		zap.String("topic", topic),
-		zap.String("purpose", purpose))
+		zap.String("purpose", purpose),
+		zap.String("workspace", workspace))
 
 	// Validate name
 	if name == "" {
 		return mcp.NewToolResultError("Channel name is required"), nil
 	}
 
-	// Create the channel
-	channel, err := ch.apiProvider.Slack().CreateConversationContext(ctx, name, isPrivate)
+	// Create the channel - check if we have the extended interface
+	var channel *slack.Channel
+	var err error
+
+	// Type assert to check if we have MCPSlackClient with workspace support
+	if mcpClient, ok := ch.apiProvider.Slack().(*provider.MCPSlackClient); ok {
+		// Use the workspace-aware method
+		channel, err = mcpClient.CreateConversationInWorkspaceContext(ctx, name, isPrivate, workspace)
+	} else {
+		// Fallback to standard method (no workspace support)
+		channel, err = ch.apiProvider.Slack().CreateConversationContext(ctx, name, isPrivate)
+	}
 	if err != nil {
 		ch.logger.Error("Failed to create channel",
 			zap.String("name", name),

@@ -113,6 +113,12 @@ func NewWithInfo(info *slack.AuthTestResponse, prov auth.Provider, opt ...Option
 	if err != nil {
 		return nil, err
 	}
+	// Debug: Log what the Edge client is using
+	fmt.Printf("DEBUG Edge client init:\n")
+	fmt.Printf("  teamID: %s\n", info.TeamID)
+	fmt.Printf("  webclientAPI: %s\n", info.URL+"api/")
+	fmt.Printf("  edgeAPI: %s\n", fmt.Sprintf("https://edgeapi.slack.com/cache/%s/", info.TeamID))
+
 	c := &Client{
 		cl:           hcl,
 		token:        prov.SlackToken(),

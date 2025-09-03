@@ -311,6 +311,9 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("purpose",
 			mcp.Description("Initial purpose/description for the channel (optional)"),
 		),
+		mcp.WithString("workspace",
+			mcp.Description("Workspace Team ID (e.g., T08U80K08H4) for Enterprise Grid users with multiple workspaces (optional)"),
+		),
 	), channelsHandler.CreateChannelHandler)
 
 	s.AddTool(mcp.NewTool("archive_channel",

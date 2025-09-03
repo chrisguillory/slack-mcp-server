@@ -233,6 +233,7 @@ Create a new public or private channel
   - `is_private` (boolean, default: false): Whether to create a private channel
   - `topic` (string, optional): Initial topic for the channel
   - `purpose` (string, optional): Initial purpose/description for the channel
+  - `workspace` (string, optional): Workspace Team ID (e.g., T08U80K08H4) for Enterprise Grid users with multiple workspaces. If not specified and user belongs to multiple workspaces, an error will be returned asking to specify the workspace.
 - **Response Format:**
   Returns CSV with metadata comments and the following fields:
   - `channel_id`: ID of the created channel

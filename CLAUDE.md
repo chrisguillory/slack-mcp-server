@@ -64,6 +64,12 @@ Messages include reactions in the format: `emoji:count:user1,user2` (enhanced in
 
 For additional functionality: Try standard API with Enterprise Grid parameters (e.g., `team_id`) first. If that fails, fallback to implementing in Edge client using curl request/response examples from user.
 
+**Channel Creation in Enterprise Grid:**
+- The server now fetches all workspace Team IDs from `enterprise_user.teams` field during initialization
+- Channel creation accepts an optional `workspace` parameter for users in multiple workspaces
+- If workspace not specified and user has multiple workspaces, an error prompts for workspace selection
+- Uses workspace Team ID (T-prefixed, e.g., T08U80K08H4) not Enterprise ID (E-prefixed)
+
 ## Development Workflow
 
 ### Current Branch Strategy

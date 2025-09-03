@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"strings"
@@ -114,9 +115,10 @@ type MCPSlackClient struct {
 	authResponse *slack.AuthTestResponse
 	authProvider auth.Provider
 
-	isEnterprise bool
-	isOAuth      bool
-	teamEndpoint string
+	isEnterprise   bool
+	isOAuth        bool
+	teamEndpoint   string
+	workspaceTeams []string // Team IDs (e.g. T08U80K08H4) for workspaces the user belongs to (from enterprise_user.teams)
 }
 
 type ApiProvider struct {
@@ -168,6 +170,13 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 		slack.OptionAPIURL(authResp.URL+"api/"),
 	)
 
+	// Debug: Log what IDs we're getting
+	fmt.Printf("DEBUG auth.test response:\n")
+	fmt.Printf("  TeamID: %s\n", authResp.TeamID)
+	fmt.Printf("  EnterpriseID: %s\n", authResp.EnterpriseID)
+	fmt.Printf("  Team: %s\n", authResp.Team)
+	fmt.Printf("  URL: %s\n", authResp.URL)
+
 	edgeClient, err := edge.NewWithInfo(authResponse, authProvider,
 		edge.OptionHTTPClient(httpClient),
 	)
@@ -177,14 +186,30 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 
 	isEnterprise := authResp.EnterpriseID != ""
 
+	// If Enterprise Grid, fetch user's workspace Team IDs from enterprise_user.teams
+	var workspaceTeams []string
+	if isEnterprise {
+		userInfo, err := slackClient.GetUserInfoContext(context.Background(), authResp.UserID)
+		if err == nil && userInfo != nil {
+			// Extract Team IDs from enterprise_user.teams field
+			if userInfo.Enterprise.Teams != nil {
+				workspaceTeams = userInfo.Enterprise.Teams
+				fmt.Printf("DEBUG: Found %d workspace Team IDs for user: %v\n", len(workspaceTeams), workspaceTeams)
+			}
+		} else {
+			fmt.Printf("DEBUG: Could not fetch user info for workspace teams: %v\n", err)
+		}
+	}
+
 	return &MCPSlackClient{
-		slackClient:  slackClient,
-		edgeClient:   edgeClient,
-		authResponse: authResponse,
-		authProvider: authProvider,
-		isEnterprise: isEnterprise,
-		isOAuth:      strings.HasPrefix(authProvider.SlackToken(), "xoxp-"),
-		teamEndpoint: authResp.URL,
+		slackClient:    slackClient,
+		edgeClient:     edgeClient,
+		authResponse:   authResponse,
+		authProvider:   authProvider,
+		isEnterprise:   isEnterprise,
+		isOAuth:        strings.HasPrefix(authProvider.SlackToken(), "xoxp-"),
+		teamEndpoint:   authResp.URL,
+		workspaceTeams: workspaceTeams,
 	}, nil
 }
 
@@ -367,56 +392,43 @@ func (c *MCPSlackClient) GetUserPresenceContext(ctx context.Context, user string
 // Channel management methods
 
 func (c *MCPSlackClient) CreateConversationContext(ctx context.Context, channelName string, isPrivate bool) (*slack.Channel, error) {
-	// For Enterprise Grid with browser tokens, use Edge client
-	if c.isEnterprise && !c.isOAuth {
-		edgeChannel, err := c.edgeClient.CreateConversation(ctx, channelName, isPrivate, c.authResponse.TeamID)
-		if err != nil {
-			return nil, err
-		}
+	// This is the original method signature for compatibility
+	// It uses the first workspace Team ID as default
+	return c.CreateConversationInWorkspaceContext(ctx, channelName, isPrivate, "")
+}
 
-		// Convert from rusq/slack.Channel to slack-go/slack.Channel
-		channel := &slack.Channel{
-			IsGeneral: edgeChannel.IsGeneral,
-			GroupConversation: slack.GroupConversation{
-				Conversation: slack.Conversation{
-					ID:                 edgeChannel.ID,
-					IsIM:               edgeChannel.IsIM,
-					IsMpIM:             edgeChannel.IsMpIM,
-					IsPrivate:          edgeChannel.IsPrivate,
-					Created:            slack.JSONTime(edgeChannel.Created.Time().UnixMilli()),
-					Unlinked:           edgeChannel.Unlinked,
-					NameNormalized:     edgeChannel.NameNormalized,
-					IsShared:           edgeChannel.IsShared,
-					IsExtShared:        edgeChannel.IsExtShared,
-					IsOrgShared:        edgeChannel.IsOrgShared,
-					IsPendingExtShared: edgeChannel.IsPendingExtShared,
-					NumMembers:         edgeChannel.NumMembers,
-					User:               edgeChannel.User,
-				},
-				Name:       edgeChannel.Name,
-				IsArchived: edgeChannel.IsArchived,
-				Members:    edgeChannel.Members,
-				Topic: slack.Topic{
-					Value: edgeChannel.Topic.Value,
-				},
-				Purpose: slack.Purpose{
-					Value: edgeChannel.Purpose.Value,
-				},
-			},
-		}
-
-		return channel, nil
-	}
-
-	// For OAuth tokens or non-Enterprise Grid, use standard API
+func (c *MCPSlackClient) CreateConversationInWorkspaceContext(ctx context.Context, channelName string, isPrivate bool, workspaceID string) (*slack.Channel, error) {
+	// Use standard API for all cases - it works with browser tokens too!
+	// The key is including the correct team_id for Enterprise Grid
 	params := slack.CreateConversationParams{
 		ChannelName: channelName,
 		IsPrivate:   isPrivate,
 	}
 
-	// For Enterprise Grid with OAuth, include team_id if available
-	if c.isEnterprise && c.authResponse != nil {
-		params.TeamID = c.authResponse.TeamID
+	// For Enterprise Grid, use the workspace Team ID (not Enterprise ID!)
+	if c.isEnterprise && len(c.workspaceTeams) > 0 {
+		// If specific workspace requested, validate it exists
+		if workspaceID != "" {
+			found := false
+			for _, teamID := range c.workspaceTeams {
+				if teamID == workspaceID {
+					params.TeamID = workspaceID
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, fmt.Errorf("workspace %s not found in user's workspaces: %v", workspaceID, c.workspaceTeams)
+			}
+		} else {
+			// If no workspace specified and user has multiple workspaces, error
+			if len(c.workspaceTeams) > 1 {
+				return nil, fmt.Errorf("multiple workspaces available (%v), please specify which one to use", c.workspaceTeams)
+			}
+			// Use the only workspace available
+			params.TeamID = c.workspaceTeams[0]
+		}
+		fmt.Printf("DEBUG: Creating channel with Team ID: %s\n", params.TeamID)
 	}
 
 	channel, err := c.slackClient.CreateConversationContext(ctx, params)
@@ -451,6 +463,10 @@ func (c *MCPSlackClient) IsEnterprise() bool {
 
 func (c *MCPSlackClient) AuthResponse() *slack.AuthTestResponse {
 	return c.authResponse
+}
+
+func (c *MCPSlackClient) GetWorkspaceTeams() []string {
+	return c.workspaceTeams
 }
 
 func (c *MCPSlackClient) Raw() struct {
