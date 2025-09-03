@@ -170,13 +170,6 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 		slack.OptionAPIURL(authResp.URL+"api/"),
 	)
 
-	// Debug: Log what IDs we're getting
-	fmt.Printf("DEBUG auth.test response:\n")
-	fmt.Printf("  TeamID: %s\n", authResp.TeamID)
-	fmt.Printf("  EnterpriseID: %s\n", authResp.EnterpriseID)
-	fmt.Printf("  Team: %s\n", authResp.Team)
-	fmt.Printf("  URL: %s\n", authResp.URL)
-
 	edgeClient, err := edge.NewWithInfo(authResponse, authProvider,
 		edge.OptionHTTPClient(httpClient),
 	)
@@ -194,10 +187,7 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 			// Extract Team IDs from enterprise_user.teams field
 			if userInfo.Enterprise.Teams != nil {
 				workspaceTeams = userInfo.Enterprise.Teams
-				fmt.Printf("DEBUG: Found %d workspace Team IDs for user: %v\n", len(workspaceTeams), workspaceTeams)
 			}
-		} else {
-			fmt.Printf("DEBUG: Could not fetch user info for workspace teams: %v\n", err)
 		}
 	}
 
@@ -428,7 +418,6 @@ func (c *MCPSlackClient) CreateConversationInWorkspaceContext(ctx context.Contex
 			// Use the only workspace available
 			params.TeamID = c.workspaceTeams[0]
 		}
-		fmt.Printf("DEBUG: Creating channel with Team ID: %s\n", params.TeamID)
 	}
 
 	channel, err := c.slackClient.CreateConversationContext(ctx, params)
