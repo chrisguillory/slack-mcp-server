@@ -99,6 +99,12 @@ type SlackAPI interface {
 	// User information
 	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
+
+	// Channel management
+	CreateConversationContext(ctx context.Context, channelName string, isPrivate bool) (*slack.Channel, error)
+	ArchiveConversationContext(ctx context.Context, channelID string) error
+	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
+	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
 }
 
 type MCPSlackClient struct {
@@ -356,6 +362,83 @@ func (c *MCPSlackClient) GetUserInfoContext(ctx context.Context, user string) (*
 func (c *MCPSlackClient) GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error) {
 	// users.getPresence is only available via standard API
 	return c.slackClient.GetUserPresenceContext(ctx, user)
+}
+
+// Channel management methods
+
+func (c *MCPSlackClient) CreateConversationContext(ctx context.Context, channelName string, isPrivate bool) (*slack.Channel, error) {
+	// For Enterprise Grid with browser tokens, use Edge client
+	if c.isEnterprise && !c.isOAuth {
+		edgeChannel, err := c.edgeClient.CreateConversation(ctx, channelName, isPrivate, c.authResponse.TeamID)
+		if err != nil {
+			return nil, err
+		}
+
+		// Convert from rusq/slack.Channel to slack-go/slack.Channel
+		channel := &slack.Channel{
+			IsGeneral: edgeChannel.IsGeneral,
+			GroupConversation: slack.GroupConversation{
+				Conversation: slack.Conversation{
+					ID:                 edgeChannel.ID,
+					IsIM:               edgeChannel.IsIM,
+					IsMpIM:             edgeChannel.IsMpIM,
+					IsPrivate:          edgeChannel.IsPrivate,
+					Created:            slack.JSONTime(edgeChannel.Created.Time().UnixMilli()),
+					Unlinked:           edgeChannel.Unlinked,
+					NameNormalized:     edgeChannel.NameNormalized,
+					IsShared:           edgeChannel.IsShared,
+					IsExtShared:        edgeChannel.IsExtShared,
+					IsOrgShared:        edgeChannel.IsOrgShared,
+					IsPendingExtShared: edgeChannel.IsPendingExtShared,
+					NumMembers:         edgeChannel.NumMembers,
+					User:               edgeChannel.User,
+				},
+				Name:       edgeChannel.Name,
+				IsArchived: edgeChannel.IsArchived,
+				Members:    edgeChannel.Members,
+				Topic: slack.Topic{
+					Value: edgeChannel.Topic.Value,
+				},
+				Purpose: slack.Purpose{
+					Value: edgeChannel.Purpose.Value,
+				},
+			},
+		}
+
+		return channel, nil
+	}
+
+	// For OAuth tokens or non-Enterprise Grid, use standard API
+	params := slack.CreateConversationParams{
+		ChannelName: channelName,
+		IsPrivate:   isPrivate,
+	}
+
+	// For Enterprise Grid with OAuth, include team_id if available
+	if c.isEnterprise && c.authResponse != nil {
+		params.TeamID = c.authResponse.TeamID
+	}
+
+	channel, err := c.slackClient.CreateConversationContext(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return channel, nil
+}
+
+func (c *MCPSlackClient) ArchiveConversationContext(ctx context.Context, channelID string) error {
+	// ArchiveConversation archives a channel
+	return c.slackClient.ArchiveConversationContext(ctx, channelID)
+}
+
+func (c *MCPSlackClient) SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error) {
+	// SetTopicOfConversation sets the topic of a channel
+	return c.slackClient.SetTopicOfConversationContext(ctx, channelID, topic)
+}
+
+func (c *MCPSlackClient) SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error) {
+	// SetPurposeOfConversation sets the purpose (description) of a channel
+	return c.slackClient.SetPurposeOfConversationContext(ctx, channelID, purpose)
 }
 
 func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error) {

@@ -635,3 +635,202 @@ func (ch *ChannelsHandler) ListChannelMembersHandler(ctx context.Context, reques
 
 	return mcp.NewToolResultText(result.String()), nil
 }
+
+// CreateChannelHandler creates a new channel
+func (ch *ChannelsHandler) CreateChannelHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("CreateChannelHandler called")
+
+	if ready, err := ch.apiProvider.IsReady(); !ready {
+		ch.logger.Error("API provider not ready", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
+	}
+
+	// Get parameters
+	name := request.GetString("name", "")
+	isPrivate := request.GetBool("is_private", false)
+	topic := request.GetString("topic", "")
+	purpose := request.GetString("purpose", "")
+
+	ch.logger.Debug("Creating channel",
+		zap.String("name", name),
+		zap.Bool("is_private", isPrivate),
+		zap.String("topic", topic),
+		zap.String("purpose", purpose))
+
+	// Validate name
+	if name == "" {
+		return mcp.NewToolResultError("Channel name is required"), nil
+	}
+
+	// Create the channel
+	channel, err := ch.apiProvider.Slack().CreateConversationContext(ctx, name, isPrivate)
+	if err != nil {
+		ch.logger.Error("Failed to create channel",
+			zap.String("name", name),
+			zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to create channel", err), nil
+	}
+
+	ch.logger.Info("Channel created successfully",
+		zap.String("channel_id", channel.ID),
+		zap.String("name", channel.Name))
+
+	// Set topic if provided
+	if topic != "" {
+		_, err = ch.apiProvider.Slack().SetTopicOfConversationContext(ctx, channel.ID, topic)
+		if err != nil {
+			ch.logger.Warn("Failed to set channel topic",
+				zap.String("channel_id", channel.ID),
+				zap.String("topic", topic),
+				zap.Error(err))
+			// Don't fail the whole operation if topic setting fails
+		} else {
+			ch.logger.Debug("Channel topic set", zap.String("channel_id", channel.ID))
+		}
+	}
+
+	// Set purpose if provided
+	if purpose != "" {
+		_, err = ch.apiProvider.Slack().SetPurposeOfConversationContext(ctx, channel.ID, purpose)
+		if err != nil {
+			ch.logger.Warn("Failed to set channel purpose",
+				zap.String("channel_id", channel.ID),
+				zap.String("purpose", purpose),
+				zap.Error(err))
+			// Don't fail the whole operation if purpose setting fails
+		} else {
+			ch.logger.Debug("Channel purpose set", zap.String("channel_id", channel.ID))
+		}
+	}
+
+	// Prepare response data
+	type ChannelCreated struct {
+		ID      string `csv:"channel_id"`
+		Name    string `csv:"name"`
+		Private bool   `csv:"is_private"`
+		Topic   string `csv:"topic"`
+		Purpose string `csv:"purpose"`
+		Created string `csv:"created"`
+	}
+
+	result := []ChannelCreated{{
+		ID:      channel.ID,
+		Name:    channel.Name,
+		Private: channel.IsPrivate,
+		Topic:   topic,
+		Purpose: purpose,
+		Created: "true",
+	}}
+
+	// Convert to CSV
+	csvBytes, err := gocsv.MarshalBytes(&result)
+	if err != nil {
+		ch.logger.Error("Failed to marshal result to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format result as CSV", err), nil
+	}
+
+	// Build result with metadata
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("# Channel created successfully\n"))
+	output.WriteString(fmt.Sprintf("# Channel ID: %s\n", channel.ID))
+	output.WriteString(fmt.Sprintf("# Channel Name: %s\n", channel.Name))
+	if channel.IsPrivate {
+		output.WriteString("# Type: Private Channel\n")
+	} else {
+		output.WriteString("# Type: Public Channel\n")
+	}
+	output.Write(csvBytes)
+
+	return mcp.NewToolResultText(output.String()), nil
+}
+
+// ArchiveChannelHandler archives a channel
+func (ch *ChannelsHandler) ArchiveChannelHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ArchiveChannelHandler called")
+
+	if ready, err := ch.apiProvider.IsReady(); !ready {
+		ch.logger.Error("API provider not ready", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
+	}
+
+	// Get channel ID parameter
+	channelID := request.GetString("channel_id", "")
+
+	ch.logger.Debug("Archiving channel", zap.String("channel_id", channelID))
+
+	// Validate channel ID
+	if channelID == "" {
+		return mcp.NewToolResultError("Channel ID is required"), nil
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channelID, "#") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn := strings.TrimPrefix(channelID, "#")
+		if _, exists := channelsMaps.Channels[chn]; !exists {
+			ch.logger.Error("Channel not found by name",
+				zap.String("channel_name", chn))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channelID)), nil
+		}
+		channelID = channelsMaps.Channels[chn].ID
+	}
+
+	// Get channel info before archiving for response
+	channelInfo, err := ch.apiProvider.Slack().GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+		ChannelID: channelID,
+	})
+	if err != nil {
+		ch.logger.Error("Failed to get channel info before archiving",
+			zap.String("channel_id", channelID),
+			zap.Error(err))
+		// Continue anyway, we might still be able to archive
+	}
+
+	// Archive the channel
+	err = ch.apiProvider.Slack().ArchiveConversationContext(ctx, channelID)
+	if err != nil {
+		ch.logger.Error("Failed to archive channel",
+			zap.String("channel_id", channelID),
+			zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to archive channel", err), nil
+	}
+
+	ch.logger.Info("Channel archived successfully",
+		zap.String("channel_id", channelID))
+
+	// Prepare response data
+	type ChannelArchived struct {
+		ID       string `csv:"channel_id"`
+		Name     string `csv:"name"`
+		Archived string `csv:"archived"`
+	}
+
+	channelName := channelID
+	if channelInfo != nil {
+		channelName = channelInfo.Name
+	}
+
+	result := []ChannelArchived{{
+		ID:       channelID,
+		Name:     channelName,
+		Archived: "true",
+	}}
+
+	// Convert to CSV
+	csvBytes, err := gocsv.MarshalBytes(&result)
+	if err != nil {
+		ch.logger.Error("Failed to marshal result to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format result as CSV", err), nil
+	}
+
+	// Build result with metadata
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("# Channel archived successfully\n"))
+	output.WriteString(fmt.Sprintf("# Channel ID: %s\n", channelID))
+	if channelInfo != nil {
+		output.WriteString(fmt.Sprintf("# Channel Name: %s\n", channelInfo.Name))
+	}
+	output.Write(csvBytes)
+
+	return mcp.NewToolResultText(output.String()), nil
+}

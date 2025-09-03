@@ -225,6 +225,42 @@ Get detailed information about a specific user
   - Combines data from users.info and users.getPresence APIs
   - Some fields may be empty depending on workspace permissions
 
+### 15. create_channel
+Create a new public or private channel
+
+- **Parameters:**
+  - `name` (string, required): Name for the new channel (lowercase, no spaces, max 80 chars)
+  - `is_private` (boolean, default: false): Whether to create a private channel
+  - `topic` (string, optional): Initial topic for the channel
+  - `purpose` (string, optional): Initial purpose/description for the channel
+- **Response Format:**
+  Returns CSV with metadata comments and the following fields:
+  - `channel_id`: ID of the created channel
+  - `name`: Name of the channel
+  - `is_private`: Whether the channel is private
+  - `topic`: Channel topic (if set)
+  - `purpose`: Channel purpose/description (if set)
+  - `created`: Always "true" for successful creation
+- **Notes:**
+  - Channel names must be unique within the workspace
+  - Topic and purpose are set via separate API calls after creation
+  - Creating private channels may require additional permissions
+
+### 16. archive_channel
+Archive a channel to preserve its history while removing it from active use
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#channel-name) to archive
+- **Response Format:**
+  Returns CSV with metadata comments and the following fields:
+  - `channel_id`: ID of the archived channel
+  - `name`: Name of the channel
+  - `archived`: Always "true" for successful archival
+- **Notes:**
+  - Archived channels can be unarchived later (not yet implemented)
+  - Some channels (like #general) cannot be archived
+  - Archiving preserves all messages and files
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:

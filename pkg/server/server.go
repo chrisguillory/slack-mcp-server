@@ -295,6 +295,32 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), usersHandler.GetUserInfoHandler)
 
+	s.AddTool(mcp.NewTool("create_channel",
+		mcp.WithDescription("Create a new public or private channel (Slack API: conversations.create)"),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Name for the new channel (lowercase, no spaces, max 80 chars)"),
+		),
+		mcp.WithBoolean("is_private",
+			mcp.DefaultBool(false),
+			mcp.Description("Whether to create a private channel. Default: false (public channel)"),
+		),
+		mcp.WithString("topic",
+			mcp.Description("Initial topic for the channel (optional)"),
+		),
+		mcp.WithString("purpose",
+			mcp.Description("Initial purpose/description for the channel (optional)"),
+		),
+	), channelsHandler.CreateChannelHandler)
+
+	s.AddTool(mcp.NewTool("archive_channel",
+		mcp.WithDescription("Archive a channel (Slack API: conversations.archive)"),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#channel-name) to archive"),
+		),
+	), channelsHandler.ArchiveChannelHandler)
+
 	s.AddTool(mcp.NewTool("list_emojis",
 		mcp.WithDescription("List available emojis/reactions (Slack API: emoji.list)"),
 		mcp.WithString("query",

@@ -60,6 +60,10 @@ The server supports multiple authentication modes:
 
 Messages include reactions in the format: `emoji:count:user1,user2` (enhanced in commit 012f4bf)
 
+### Enterprise Grid Implementation Pattern
+
+For additional functionality: Try standard API with Enterprise Grid parameters (e.g., `team_id`) first. If that fails, fallback to implementing in Edge client using curl request/response examples from user.
+
 ## Development Workflow
 
 ### Current Branch Strategy
