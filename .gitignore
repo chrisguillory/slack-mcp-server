@@ -26,3 +26,5 @@ docker-compose.release.yml
 
 # OS generated files
 .DS_Store
+# Cache files
+cache/
