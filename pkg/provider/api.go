@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/limiter"
@@ -55,14 +56,37 @@ type Emoji struct {
 }
 
 type Channel struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Topic       string `json:"topic"`
-	Purpose     string `json:"purpose"`
-	MemberCount int    `json:"memberCount"`
-	IsMpIM      bool   `json:"mpim"`
-	IsIM        bool   `json:"im"`
-	IsPrivate   bool   `json:"private"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	NameNormalized string   `json:"name_normalized,omitempty"`
+	Topic          string   `json:"topic"`
+	Purpose        string   `json:"purpose"`
+	MemberCount    int      `json:"memberCount"`
+	Members        []string `json:"members,omitempty"`
+	IsMpIM         bool     `json:"mpim"`
+	IsIM           bool     `json:"im"`
+	IsPrivate      bool     `json:"private"`
+
+	// Additional fields from boot data
+	Creator            string   `json:"creator,omitempty"`
+	Created            int64    `json:"created,omitempty"`
+	Updated            int64    `json:"updated,omitempty"`
+	IsArchived         bool     `json:"is_archived,omitempty"`
+	IsMember           bool     `json:"is_member,omitempty"`
+	IsGeneral          bool     `json:"is_general,omitempty"`
+	IsShared           bool     `json:"is_shared,omitempty"`
+	IsExtShared        bool     `json:"is_ext_shared,omitempty"`
+	IsOrgShared        bool     `json:"is_org_shared,omitempty"`
+	IsChannel          bool     `json:"is_channel,omitempty"`
+	IsGroup            bool     `json:"is_group,omitempty"`
+	IsFrozen           bool     `json:"is_frozen,omitempty"`
+	IsPendingExtShared bool     `json:"is_pending_ext_shared,omitempty"`
+	IsOpen             bool     `json:"is_open,omitempty"`
+	Unlinked           int64    `json:"unlinked,omitempty"`
+	ContextTeamID      string   `json:"context_team_id,omitempty"`
+	SharedTeamIDs      []string `json:"shared_team_ids,omitempty"`
+	LastRead           string   `json:"last_read,omitempty"`
+	Latest             string   `json:"latest,omitempty"`
 }
 
 type SlackAPI interface {
@@ -259,15 +283,18 @@ func (c *MCPSlackClient) GetConversationsContext(ctx context.Context, params *sl
 					continue
 				}
 
+				// Convert from rusq/slack.Channel to slack-go/slack.Channel
+				// The edge client already populated the fields from boot data
 				channels = append(channels, slack.Channel{
 					IsGeneral: ec.IsGeneral,
+					IsMember:  ec.IsMember,
 					GroupConversation: slack.GroupConversation{
 						Conversation: slack.Conversation{
 							ID:                 ec.ID,
 							IsIM:               ec.IsIM,
 							IsMpIM:             ec.IsMpIM,
 							IsPrivate:          ec.IsPrivate,
-							Created:            slack.JSONTime(ec.Created.Time().UnixMilli()),
+							Created:            slack.JSONTime(ec.Created),
 							Unlinked:           ec.Unlinked,
 							NameNormalized:     ec.NameNormalized,
 							IsShared:           ec.IsShared,
@@ -278,13 +305,18 @@ func (c *MCPSlackClient) GetConversationsContext(ctx context.Context, params *sl
 							User:               ec.User,
 						},
 						Name:       ec.Name,
+						Creator:    ec.Creator,
 						IsArchived: ec.IsArchived,
 						Members:    ec.Members,
 						Topic: slack.Topic{
-							Value: ec.Topic.Value,
+							Value:   ec.Topic.Value,
+							Creator: ec.Topic.Creator,
+							LastSet: slack.JSONTime(ec.Topic.LastSet),
 						},
 						Purpose: slack.Purpose{
-							Value: ec.Purpose.Value,
+							Value:   ec.Purpose.Value,
+							Creator: ec.Purpose.Creator,
+							LastSet: slack.JSONTime(ec.Purpose.LastSet),
 						},
 					},
 				})
@@ -510,19 +542,33 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
+	// Use cache directory - defaults to ./cache, can be overridden with env var
+	cacheDir := os.Getenv("SLACK_MCP_CACHE_DIR")
+	if cacheDir == "" {
+		cacheDir = "./cache"
+	}
+
+	// Ensure cache directory exists
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		logger.Warn("Failed to create cache directory, using current directory",
+			zap.String("cache_dir", cacheDir),
+			zap.Error(err))
+		cacheDir = "." // Fall back to current directory
+	}
+
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
-		usersCache = ".users_cache.json"
+		usersCache = filepath.Join(cacheDir, "users_cache.json")
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
-		channelsCache = ".channels_cache.json"
+		channelsCache = filepath.Join(cacheDir, "channels_cache.json")
 	}
 
 	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
 	if emojisCache == "" {
-		emojisCache = ".emojis_cache.json"
+		emojisCache = filepath.Join(cacheDir, "emojis_cache.json")
 	}
 
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
@@ -560,19 +606,33 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
+	// Use cache directory - defaults to ./cache, can be overridden with env var
+	cacheDir := os.Getenv("SLACK_MCP_CACHE_DIR")
+	if cacheDir == "" {
+		cacheDir = "./cache"
+	}
+
+	// Ensure cache directory exists
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		logger.Warn("Failed to create cache directory, using current directory",
+			zap.String("cache_dir", cacheDir),
+			zap.Error(err))
+		cacheDir = "." // Fall back to current directory
+	}
+
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
-		usersCache = ".users_cache.json"
+		usersCache = filepath.Join(cacheDir, "users_cache.json")
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
-		channelsCache = ".channels_cache_v2.json"
+		channelsCache = filepath.Join(cacheDir, "channels_cache_v2.json")
 	}
 
 	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
 	if emojisCache == "" {
-		emojisCache = ".emojis_cache.json"
+		emojisCache = filepath.Join(cacheDir, "emojis_cache.json")
 	}
 
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
@@ -923,20 +983,7 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 
 		chans = make([]Channel, 0, len(channels))
 		for _, channel := range channels {
-			ch := mapChannel(
-				channel.ID,
-				channel.Name,
-				channel.NameNormalized,
-				channel.Topic.Value,
-				channel.Purpose.Value,
-				channel.User,
-				channel.Members,
-				channel.NumMembers,
-				channel.IsIM,
-				channel.IsMpIM,
-				channel.IsPrivate,
-				ap.ProvideUsersMap().Users,
-			)
+			ch := mapChannel(channel, ap.ProvideUsersMap().Users)
 			chans = append(chans, ch)
 		}
 
@@ -1015,21 +1062,15 @@ func (ap *ApiProvider) Slack() SlackAPI {
 	return ap.client
 }
 
-func mapChannel(
-	id, name, nameNormalized, topic, purpose, user string,
-	members []string,
-	numMembers int,
-	isIM, isMpIM, isPrivate bool,
-	usersMap map[string]slack.User,
-) Channel {
-	channelName := name
-	finalPurpose := purpose
-	finalTopic := topic
-	finalMemberCount := numMembers
+func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
+	channelName := channel.Name
+	finalPurpose := channel.Purpose.Value
+	finalTopic := channel.Topic.Value
+	finalMemberCount := channel.NumMembers
 
-	if isIM {
+	if channel.IsIM {
 		finalMemberCount = 2
-		if u, ok := usersMap[user]; ok {
+		if u, ok := usersMap[channel.User]; ok {
 			channelName = "@" + u.Name
 			// Use RealName, fallback to Profile.RealName if empty
 			displayName := u.RealName
@@ -1042,15 +1083,15 @@ func mapChannel(
 			}
 			finalPurpose = "DM with " + displayName
 		} else {
-			channelName = "@" + user
-			finalPurpose = "DM with " + user
+			channelName = "@" + channel.User
+			finalPurpose = "DM with " + channel.User
 		}
 		finalTopic = ""
-	} else if isMpIM {
-		if len(members) > 0 {
-			finalMemberCount = len(members)
+	} else if channel.IsMpIM {
+		if len(channel.Members) > 0 {
+			finalMemberCount = len(channel.Members)
 			var userNames []string
-			for _, uid := range members {
+			for _, uid := range channel.Members {
 				if u, ok := usersMap[uid]; ok {
 					// Use RealName, fallback to Profile.RealName if empty
 					displayName := u.RealName
@@ -1066,27 +1107,50 @@ func mapChannel(
 					userNames = append(userNames, uid)
 				}
 			}
-			channelName = "@" + nameNormalized
+			channelName = "@" + channel.NameNormalized
 			finalPurpose = "Group DM with " + strings.Join(userNames, ", ")
 			finalTopic = ""
 		}
 	} else {
 		// Use nameNormalized if available, otherwise fall back to name
-		displayName := nameNormalized
+		displayName := channel.NameNormalized
 		if displayName == "" {
-			displayName = name
+			displayName = channel.Name
 		}
 		channelName = "#" + displayName
 	}
 
 	return Channel{
-		ID:          id,
-		Name:        channelName,
-		Topic:       finalTopic,
-		Purpose:     finalPurpose,
-		MemberCount: finalMemberCount,
-		IsIM:        isIM,
-		IsMpIM:      isMpIM,
-		IsPrivate:   isPrivate,
+		ID:             channel.ID,
+		Name:           channelName,
+		NameNormalized: channel.NameNormalized,
+		Topic:          finalTopic,
+		Purpose:        finalPurpose,
+		MemberCount:    finalMemberCount,
+		Members:        channel.Members,
+		IsIM:           channel.IsIM,
+		IsMpIM:         channel.IsMpIM,
+		IsPrivate:      channel.IsPrivate,
+		// Map additional fields from boot data (these exist in slack.Channel)
+		Creator:            channel.Creator,
+		Created:            int64(channel.Created),
+		IsArchived:         channel.IsArchived,
+		IsMember:           channel.IsMember,
+		IsGeneral:          channel.IsGeneral,
+		IsShared:           channel.IsShared,
+		IsExtShared:        channel.IsExtShared,
+		IsOrgShared:        channel.IsOrgShared,
+		IsChannel:          channel.IsChannel,
+		IsGroup:            channel.IsGroup,
+		IsPendingExtShared: channel.IsPendingExtShared,
+		IsOpen:             channel.IsOpen,
+		Unlinked:           int64(channel.Unlinked),
+		ContextTeamID:      channel.ContextTeamID,
+		SharedTeamIDs:      channel.SharedTeamIDs,
+		LastRead:           channel.LastRead,
+		Latest:             "", // channel.Latest is a *Message, not a string
+		// These fields need special handling or are not available in slack.Channel
+		IsFrozen: false, // Not available in slack.Channel
+		Updated:  0,     // Not available in slack.Channel
 	}
 }
