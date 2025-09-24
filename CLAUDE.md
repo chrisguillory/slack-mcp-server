@@ -81,6 +81,13 @@ For additional functionality: Try standard API with Enterprise Grid parameters (
 - Integration tests: Require `SLACK_MCP_OPENAI_API` environment variable
 - Test single file: `go test -v ./pkg/handler/conversations_test.go`
 
+### Testing MCP Server Changes
+**IMPORTANT**: When testing changes to the MCP server:
+1. **Always run `go build ./cmd/slack-mcp-server` first** to check for compilation errors
+2. **Explicitly ask the user to restart the MCP server** before testing with live Slack API calls
+3. **Wait for user confirmation** that the server has been restarted before proceeding with tests
+4. The MCP server must be restarted for code changes to take effect
+
 ### Environment Variables
 
 Critical variables for development:

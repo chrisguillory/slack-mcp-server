@@ -151,10 +151,25 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 	warn := false
 
 	for _, msg := range slackMessages {
+		// Start with the message's user field
+		userID := msg.User
 		userName, realName, ok := getUserInfo(msg.User, usersMap.Users)
 
 		if !ok && msg.User == "" && msg.Username != "" {
-			userName, realName, ok = getBotInfo(msg.Username)
+			// Bot message - Username contains the bot ID in search results
+			botUser, found := getBotInfo(msg.Username, sh.apiProvider)
+			if found {
+				userID = botUser.ID
+				userName = botUser.Name
+				realName = botUser.RealName
+				ok = true
+			} else {
+				// Fallback: use bot ID (Username field in search) for all fields for traceability
+				userID = msg.Username
+				userName = msg.Username
+				realName = msg.Username
+				ok = true
+			}
 		} else if !ok {
 			warn = true
 		}
@@ -171,7 +186,7 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 
 		messages = append(messages, SearchMessage{
 			MsgID:     msg.Timestamp,
-			UserID:    msg.User,
+			UserID:    userID,
 			UserName:  userName,
 			RealName:  realName,
 			Text:      text.ProcessText(msgText),

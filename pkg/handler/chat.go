@@ -484,10 +484,41 @@ func (ch *ChatHandler) convertMessagesFromHistory(slackMessages []slack.Message,
 			continue
 		}
 
+		// Start with the message's user field
+		userID := msg.User
 		userName, realName, ok := getUserInfo(msg.User, usersMap.Users)
 
 		if !ok && msg.SubType == "bot_message" {
-			userName, realName, ok = getBotInfo(msg.Username)
+			// Bot messages should have BotID, not Username
+			if msg.Username != "" {
+				// Unexpected: bot message has Username set
+				ch.logger.Error("UNEXPECTED: Bot message has Username in chat",
+					zap.String("username", msg.Username),
+					zap.String("bot_id", msg.BotID),
+					zap.String("timestamp", msg.Timestamp))
+				panic(fmt.Sprintf("Bot message has unexpected Username: %s (BotID: %s)", msg.Username, msg.BotID))
+			}
+			if msg.BotID == "" {
+				// This should never happen for bot messages
+				ch.logger.Error("CRITICAL: Bot message missing BotID in chat",
+					zap.String("timestamp", msg.Timestamp))
+				panic("Bot message missing BotID")
+			}
+
+			// Resolve bot to user
+			botUser, found := getBotInfo(msg.BotID, ch.apiProvider)
+			if found {
+				userID = botUser.ID
+				userName = botUser.Name
+				realName = botUser.RealName
+				ok = true
+			} else {
+				// Fallback: use bot ID for all fields for traceability
+				userID = msg.BotID
+				userName = msg.BotID
+				realName = msg.BotID
+				ok = true
+			}
 		}
 
 		if !ok {
@@ -512,7 +543,7 @@ func (ch *ChatHandler) convertMessagesFromHistory(slackMessages []slack.Message,
 
 		messages = append(messages, Message{
 			MsgID:     msg.Timestamp,
-			UserID:    msg.User,
+			UserID:    userID,
 			UserName:  userName,
 			RealName:  realName,
 			Text:      text.ProcessText(msgText),

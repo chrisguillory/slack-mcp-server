@@ -236,18 +236,52 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 		}
 
 		// Only do user lookups if username or real name requested
-		var userName, realName string
+		var userID, userName, realName string
 		var ok bool
 		if needUserLookup {
+			// Start with the message's user field
+			userID = msg.User
 			userName, realName, ok = getUserInfo(msg.User, ch.apiProvider.ProvideUsersMap().Users)
 
 			if !ok && msg.SubType == "bot_message" {
-				userName, realName, ok = getBotInfo(msg.Username)
+				// Bot messages should have BotID, not Username
+				if msg.Username != "" {
+					// Unexpected: bot message has Username set
+					ch.logger.Error("UNEXPECTED: Bot message has Username",
+						zap.String("username", msg.Username),
+						zap.String("bot_id", msg.BotID),
+						zap.String("timestamp", msg.Timestamp))
+					panic(fmt.Sprintf("Bot message has unexpected Username: %s (BotID: %s)", msg.Username, msg.BotID))
+				}
+				if msg.BotID == "" {
+					// This should never happen for bot messages
+					ch.logger.Error("CRITICAL: Bot message missing BotID",
+						zap.String("timestamp", msg.Timestamp))
+					panic("Bot message missing BotID")
+				}
+
+				// Resolve bot to user
+				botUser, found := getBotInfo(msg.BotID, ch.apiProvider)
+				if found {
+					userID = botUser.ID
+					userName = botUser.Name
+					realName = botUser.RealName
+					ok = true
+				} else {
+					// Fallback: use bot ID for all fields for traceability
+					userID = msg.BotID
+					userName = msg.BotID
+					realName = msg.BotID
+					ok = true
+				}
 			}
 
 			if !ok {
 				warn = true
 			}
+		} else {
+			// When not doing lookups, just use the raw user ID
+			userID = msg.User
 		}
 
 		// Only convert timestamp if time field requested
@@ -270,7 +304,7 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 
 		messages = append(messages, Message{
 			MsgID:     msg.Timestamp,
-			UserID:    msg.User,
+			UserID:    userID,
 			UserName:  userName,
 			RealName:  realName,
 			Text:      msgText,

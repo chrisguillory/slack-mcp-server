@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gocarina/gocsv"
+	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
 )
@@ -19,8 +20,8 @@ func getUserInfo(userID string, usersMap map[string]slack.User) (userName, realN
 	return userID, userID, false
 }
 
-func getBotInfo(botID string) (userName, realName string, ok bool) {
-	return botID, botID, true
+func getBotInfo(botID string, apiProvider *provider.ApiProvider) (slack.User, bool) {
+	return apiProvider.ResolveBotIDToUser(botID)
 }
 
 func marshalMessagesToCSV(messages []Message) (*mcp.CallToolResult, error) {

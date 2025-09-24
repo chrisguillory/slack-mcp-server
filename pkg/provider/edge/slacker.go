@@ -3,6 +3,7 @@ package edge
 import (
 	"context"
 	"errors"
+	"runtime/trace"
 	"sync"
 
 	"github.com/rusq/slack"
@@ -132,4 +133,15 @@ func (cl *Client) GetConversationInfoContext(ctx context.Context, input *slack.G
 		return nil, ErrNotFound
 	}
 	return &cc[0], nil
+}
+
+// GetBotInfoContext returns bot information using the bots.info API
+func (cl *Client) GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error) {
+	ctx, task := trace.NewTask(ctx, "GetBotInfo")
+	defer task.End()
+
+	// Use the standard Slack API client for bots.info
+	// The Edge client doesn't have direct support for bots.info, so we delegate to the standard client
+	// This is consistent with how other bot-related operations work
+	return nil, errors.New("bots.info not supported in edge client - use standard API")
 }

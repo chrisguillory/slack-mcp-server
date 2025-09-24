@@ -125,6 +125,9 @@ type SlackAPI interface {
 	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
 	GetUserPresenceContext(ctx context.Context, user string) (*slack.UserPresence, error)
 
+	// Bot information
+	GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error)
+
 	// Channel management
 	CreateConversationContext(ctx context.Context, channelName string, isPrivate bool) (*slack.Channel, error)
 	ArchiveConversationContext(ctx context.Context, channelID string) error
@@ -165,6 +168,10 @@ type ApiProvider struct {
 	emojis      map[string]Emoji
 	emojisCache string
 	emojisReady bool
+
+	// Bot resolution: bot_id -> user mapping
+	botIDToUser map[string]slack.User // B091T8Q8ETT -> User{ID: "U091T8Q8Q8Z", Name: "linear"}
+	appIDToUser map[string]slack.User // AEMQ3Q4F4 -> User{ID: "U091T8Q8Q8Z", Name: "linear"}
 }
 
 func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlackClient, error) {
@@ -411,6 +418,11 @@ func (c *MCPSlackClient) GetUserPresenceContext(ctx context.Context, user string
 	return c.slackClient.GetUserPresenceContext(ctx, user)
 }
 
+func (c *MCPSlackClient) GetBotInfoContext(ctx context.Context, parameters slack.GetBotInfoParameters) (*slack.Bot, error) {
+	// bots.info is available via standard API
+	return c.slackClient.GetBotInfoContext(ctx, parameters)
+}
+
 // Channel management methods
 
 func (c *MCPSlackClient) CreateConversationContext(ctx context.Context, channelName string, isPrivate bool) (*slack.Channel, error) {
@@ -597,6 +609,9 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 
 		emojis:      make(map[string]Emoji),
 		emojisCache: emojisCache,
+
+		botIDToUser: make(map[string]slack.User),
+		appIDToUser: make(map[string]slack.User),
 	}
 }
 
@@ -661,6 +676,9 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 
 		emojis:      make(map[string]Emoji),
 		emojisCache: emojisCache,
+
+		botIDToUser: make(map[string]slack.User),
+		appIDToUser: make(map[string]slack.User),
 	}
 }
 
@@ -733,6 +751,8 @@ func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
 				zap.String("cache_file", ap.usersCache))
 		}
 	}
+
+	// No need to build app_id mapping at startup - we'll do it on-demand in ResolveBotIDToUser
 
 	ap.usersReady = true
 
@@ -1153,4 +1173,77 @@ func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
 		IsFrozen: false, // Not available in slack.Channel
 		Updated:  0,     // Not available in slack.Channel
 	}
+}
+
+// ResolveBotIDToUser resolves a bot ID to a user, using cache or API
+func (ap *ApiProvider) ResolveBotIDToUser(botID string) (slack.User, bool) {
+	// Check cache first
+	if user, ok := ap.botIDToUser[botID]; ok {
+		ap.logger.Debug("Bot ID resolved from cache",
+			zap.String("bot_id", botID),
+			zap.String("user_name", user.Name))
+		return user, true
+	}
+
+	// Try to fetch bot info via API
+	ctx := context.Background()
+	botInfo, err := ap.client.GetBotInfoContext(ctx, slack.GetBotInfoParameters{
+		Bot: botID,
+	})
+	if err != nil {
+		ap.logger.Debug("Failed to fetch bot info",
+			zap.String("bot_id", botID),
+			zap.Error(err))
+		return slack.User{}, false
+	}
+
+	// Look up user by app_id - first check cache, then search users list
+
+	// First check if we've already cached this app_id mapping
+	if user, ok := ap.appIDToUser[botInfo.AppID]; ok {
+		// Cache the bot->user mapping for next time
+		ap.botIDToUser[botID] = user
+		ap.logger.Debug("Bot ID resolved via cached app_id",
+			zap.String("bot_id", botID),
+			zap.String("app_id", botInfo.AppID),
+			zap.String("user_id", user.ID),
+			zap.String("user_name", user.Name))
+		return user, true
+	}
+
+	// Not in cache, search through users list for matching app_id
+	for _, user := range ap.users {
+		if user.IsBot && user.Profile.ApiAppID == botInfo.AppID {
+			// Found it! Cache both mappings
+			ap.appIDToUser[botInfo.AppID] = user
+			ap.botIDToUser[botID] = user
+			ap.logger.Debug("Bot ID resolved by searching users",
+				zap.String("bot_id", botID),
+				zap.String("app_id", botInfo.AppID),
+				zap.String("user_id", user.ID),
+				zap.String("user_name", user.Name))
+			return user, true
+		}
+	}
+
+	ap.logger.Debug("App ID not found in users list",
+		zap.String("bot_id", botID),
+		zap.String("app_id", botInfo.AppID),
+		zap.String("bot_name", botInfo.Name))
+
+	// No user found, but we have bot info - create a pseudo-user
+	pseudoUser := slack.User{
+		ID:       botID,
+		Name:     strings.ToLower(botInfo.Name),
+		RealName: botInfo.Name,
+		IsBot:    true,
+	}
+
+	// Cache it
+	ap.botIDToUser[botID] = pseudoUser
+	ap.logger.Debug("Created pseudo-user for bot",
+		zap.String("bot_id", botID),
+		zap.String("bot_name", botInfo.Name))
+
+	return pseudoUser, true
 }
