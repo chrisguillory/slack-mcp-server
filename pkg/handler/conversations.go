@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/gocarina/gocsv"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
@@ -391,8 +393,18 @@ func (ch *ConversationsHandler) parseParamsToolConversations(request mcp.CallToo
 		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
 		chn, ok := channelsMaps.ChannelsInv[channel]
 		if !ok {
-			ch.logger.Error("Channel not found in synced cache", zap.String("channel", channel))
-			return nil, fmt.Errorf("channel %q not found. Try removing cache file and restarting MCP Server", channel)
+			// Get cache file info for better diagnostics
+			cacheInfo := ""
+			if fileInfo, err := os.Stat("cache/channels_cache_v2.json"); err == nil {
+				age := humanize.Time(fileInfo.ModTime())
+				size := humanize.Bytes(uint64(fileInfo.Size()))
+				cacheInfo = fmt.Sprintf(", cache: %s old, %s", age, size)
+			}
+
+			ch.logger.Error("Channel not found in cache",
+				zap.String("channel", channel),
+				zap.Int("cache_size", len(channelsMaps.Channels)))
+			return nil, fmt.Errorf("channel %q not found in cache (%d channels loaded%s)", channel, len(channelsMaps.Channels), cacheInfo)
 		}
 		channel = channelsMaps.Channels[chn].ID
 	}
