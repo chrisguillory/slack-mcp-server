@@ -16,6 +16,8 @@ services:
       - ./go.sum:/app/go.sum:ro
       # Mount cache directory (read-write for cache files)
       - ./cache:/app/cache
+      # Mount downloads directory (read-write for downloaded files)
+      - ./downloads:/app/downloads
       # Mount go mod cache for faster builds
       - go-mod-cache:/go/pkg/mod
     environment:
@@ -33,6 +35,11 @@ services:
       SLACK_MCP_UPDATE_MESSAGE_TOOL: ${SLACK_MCP_UPDATE_MESSAGE_TOOL:-}
       # Logging
       SLACK_MCP_LOG_LEVEL: ${SLACK_MCP_LOG_LEVEL:-debug}
+      # Downloads directory (maps to ./downloads on host)
+      SLACK_MCP_DOWNLOAD_DIR: /app/downloads
+      # Host path for downloads (used to translate container paths to host paths)
+      # Set this to your absolute host downloads path (e.g., /Users/yourname/slack-mcp-server/downloads)
+      SLACK_MCP_HOST_DOWNLOADS_PATH: ${SLACK_MCP_HOST_DOWNLOADS_PATH:-}
       # Go environment
       CGO_ENABLED: "0"
       GOTOOLCHAIN: "local"

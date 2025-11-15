@@ -62,6 +62,8 @@ type SearchMessage struct {
 	Text      string `json:"text"`
 	Time      string `json:"time"`
 	Reactions string `json:"reactions,omitempty"`
+	Files     string `json:"files,omitempty"`
+	FilesFull string `json:"filesFull,omitempty"`
 	Permalink string `json:"permalink"`
 }
 
@@ -119,6 +121,11 @@ func (sh *SearchHandler) SearchMessagesHandler(ctx context.Context, request mcp.
 	// Parse fields parameter
 	fields := request.GetString("fields", "msgID,userUser,realName,channelID,text,time")
 	requestedFields := sh.parseFields(fields)
+
+	// Validate that files/filesFull are not requested (not supported by search API)
+	if requestedFields["files"] || requestedFields["filesFull"] {
+		return mcp.NewToolResultError("files and filesFull fields are not supported by search_messages. Use get_channel_messages or get_thread_messages to retrieve file metadata."), nil
+	}
 
 	// Build result with metadata at the beginning (similar to channels_list and users_list)
 	csvBytes, err := sh.marshalSearchMessagesWithFields(messages, requestedFields)
@@ -184,6 +191,9 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 
 		msgText := msg.Text + text.AttachmentsTo2CSV(msg.Text, msg.Attachments) + text.BlocksToText(msg.Blocks)
 
+		// Note: Slack search API (search.messages) does not return file metadata in the Files field
+		// Files can only be retrieved via conversations.history or conversations.replies
+		// Therefore, the Files field will be empty for search results
 		messages = append(messages, SearchMessage{
 			MsgID:     msg.Timestamp,
 			UserID:    userID,
@@ -194,6 +204,7 @@ func (sh *SearchHandler) convertMessagesFromSearch(slackMessages []slack.SearchM
 			ThreadTs:  threadTs,
 			Time:      timestamp,
 			Reactions: "",
+			Files:     "", // Search API doesn't return file metadata
 			Permalink: msg.Permalink,
 		})
 	}
@@ -604,7 +615,7 @@ func (sh *SearchHandler) parseFields(fields string) map[string]bool {
 	requestedFields := make(map[string]bool)
 
 	if fields == "all" {
-		// Include all available fields
+		// Include all available fields (excluding files/filesFull which are not supported by search API)
 		requestedFields["msgID"] = true
 		requestedFields["userID"] = true
 		requestedFields["userUser"] = true
@@ -646,6 +657,8 @@ func (sh *SearchHandler) marshalSearchMessagesWithFields(messages []SearchMessag
 		{"text", "Text"},
 		{"time", "Time"},
 		{"reactions", "Reactions"},
+		{"files", "Files"},
+		{"filesFull", "FilesFull"},
 		{"permalink", "Permalink"},
 	}
 
@@ -687,6 +700,10 @@ func (sh *SearchHandler) marshalSearchMessagesWithFields(messages []SearchMessag
 				row = append(row, msg.Time)
 			case "reactions":
 				row = append(row, msg.Reactions)
+			case "files":
+				row = append(row, msg.Files)
+			case "filesFull":
+				row = append(row, msg.FilesFull)
 			case "permalink":
 				row = append(row, msg.Permalink)
 			}

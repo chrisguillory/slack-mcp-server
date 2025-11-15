@@ -33,6 +33,8 @@ type Message struct {
 	Text      string `json:"text"`
 	Time      string `json:"time"`
 	Reactions string `json:"reactions,omitempty"`
+	Files     string `json:"files,omitempty"`
+	FilesFull string `json:"filesFull,omitempty"`
 	Cursor    string `json:"cursor,omitempty"`
 }
 
@@ -210,6 +212,8 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 	// Check which fields we need to optimize
 	needUserLookup := fields["userUser"] || fields["realName"]
 	needReactions := fields["reactions"]
+	needFiles := fields["files"]
+	needFilesFull := fields["filesFull"]
 	needText := fields["text"]
 	needTime := fields["time"]
 
@@ -235,6 +239,18 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 		var parsedReactions string
 		if needReactions {
 			parsedReactions = ch.parseReactions(msg.Reactions)
+		}
+
+		// Only parse files if requested
+		var parsedFiles string
+		if needFiles {
+			parsedFiles = parseFiles(msg.Files)
+		}
+
+		// Only parse files with URLs if files_full requested
+		var parsedFilesFull string
+		if needFilesFull {
+			parsedFilesFull = parseFilesWithURLs(msg.Files)
 		}
 
 		// Only do user lookups if username or real name requested
@@ -314,6 +330,8 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 			ThreadTs:  msg.ThreadTimestamp,
 			Time:      timestamp,
 			Reactions: parsedReactions,
+			Files:     parsedFiles,
+			FilesFull: parsedFilesFull,
 		})
 	}
 

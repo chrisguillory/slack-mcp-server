@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server"
@@ -50,6 +52,26 @@ func main() {
 
 	p := provider.New(transport, logger)
 	s := server.NewMCPServer(p, logger)
+
+	// Set up signal handling for graceful shutdown (ensures cleanup runs)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+	// Cleanup function to be called on exit
+	cleanup := func() {
+		logger.Info("Running cleanup...", zap.String("context", "console"))
+		s.Cleanup()
+	}
+	defer cleanup()
+
+	go func() {
+		sig := <-sigChan
+		logger.Info("Received shutdown signal",
+			zap.String("context", "console"),
+			zap.String("signal", sig.String()))
+		cleanup()
+		os.Exit(0)
+	}()
 
 	go func() {
 		var once sync.Once

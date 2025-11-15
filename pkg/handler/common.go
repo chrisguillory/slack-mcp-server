@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/csv"
+	"fmt"
 	"strings"
 
 	"github.com/gocarina/gocsv"
@@ -22,6 +23,60 @@ func getUserInfo(userID string, usersMap map[string]slack.User) (userName, realN
 
 func getBotInfo(botID string, apiProvider *provider.ApiProvider) (slack.User, bool) {
 	return apiProvider.ResolveBotIDToUser(botID)
+}
+
+// parseFiles converts a slice of slack.File into a CSV-friendly string format (without URLs).
+// Format: id:name:filetype:size|id:name:filetype:size
+// Each file is represented as colon-separated fields: id, name, filetype, size
+// Multiple files are separated by pipe (|) characters
+// Use parseFilesWithURLs() if URLs are needed
+func parseFiles(files []slack.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	var fileParts []string
+	for _, f := range files {
+		// Escape special characters in filename to avoid breaking the format
+		safeName := strings.ReplaceAll(f.Name, ":", "_")
+		safeName = strings.ReplaceAll(safeName, "|", "_")
+
+		// Format: id:name:filetype:size (no URL for token efficiency)
+		fileParts = append(fileParts, fmt.Sprintf("%s:%s:%s:%d",
+			f.ID, safeName, f.Filetype, f.Size))
+	}
+
+	return strings.Join(fileParts, "|")
+}
+
+// parseFilesWithURLs converts a slice of slack.File into a CSV-friendly string format (with URLs).
+// Format: id:name:filetype:size:url|id:name:filetype:size:url
+// Each file is represented as colon-separated fields: id, name, filetype, size, url_private
+// Multiple files are separated by pipe (|) characters
+func parseFilesWithURLs(files []slack.File) string {
+	if len(files) == 0 {
+		return ""
+	}
+
+	var fileParts []string
+	for _, f := range files {
+		// Escape special characters in filename to avoid breaking the format
+		safeName := strings.ReplaceAll(f.Name, ":", "_")
+		safeName = strings.ReplaceAll(safeName, "|", "_")
+
+		// Use URLPrivate for authenticated access to private files
+		fileURL := f.URLPrivate
+		if fileURL == "" {
+			// Fallback to permalink if private URL not available
+			fileURL = f.Permalink
+		}
+
+		// Format: id:name:filetype:size:url_private
+		fileParts = append(fileParts, fmt.Sprintf("%s:%s:%s:%d:%s",
+			f.ID, safeName, f.Filetype, f.Size, fileURL))
+	}
+
+	return strings.Join(fileParts, "|")
 }
 
 func marshalMessagesToCSV(messages []Message) (*mcp.CallToolResult, error) {
@@ -56,6 +111,7 @@ func parseMessageFields(fields string) map[string]bool {
 		requestedFields["text"] = true
 		requestedFields["time"] = true
 		requestedFields["reactions"] = true
+		requestedFields["files"] = true
 		requestedFields["cursor"] = true
 	} else {
 		// Parse comma-separated fields
@@ -89,6 +145,8 @@ func marshalMessagesWithFields(messages []Message, fields map[string]bool, inclu
 		{"text", "Text"},
 		{"time", "Time"},
 		{"reactions", "Reactions"},
+		{"files", "Files"},
+		{"filesFull", "FilesFull"},
 		{"cursor", "Cursor"},
 	}
 
@@ -134,6 +192,10 @@ func marshalMessagesWithFields(messages []Message, fields map[string]bool, inclu
 				row = append(row, msg.Time)
 			case "reactions":
 				row = append(row, msg.Reactions)
+			case "files":
+				row = append(row, msg.Files)
+			case "filesFull":
+				row = append(row, msg.FilesFull)
 			case "cursor":
 				row = append(row, msg.Cursor)
 			}

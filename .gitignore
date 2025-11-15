@@ -29,4 +29,10 @@ docker-compose.release.yml
 # Cache files
 cache/
 
+# Downloads directory (user-downloaded files)
+downloads/
+
+# Build binary
+slack-mcp-server
+
 scratch/

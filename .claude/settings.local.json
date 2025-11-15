@@ -14,7 +14,10 @@
       "Bash(go fmt:*)",
       "Bash(go build:*)",
       "mcp__slack__get_thread_messages",
-      "mcp__slack__get_channel_messages"
+      "mcp__slack__get_channel_messages",
+      "mcp__slack__download_file",
+      "Bash(docker logs:*)",
+      "Bash(docker ps:*)"
     ],
     "deny": [],
     "ask": []

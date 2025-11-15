@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/handler"
@@ -17,8 +18,9 @@ import (
 )
 
 type MCPServer struct {
-	server *server.MCPServer
-	logger *zap.Logger
+	server      *server.MCPServer
+	logger      *zap.Logger
+	fileHandler *handler.FileHandler
 }
 
 func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer {
@@ -40,6 +42,11 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	usersHandler := handler.NewUsersHandler(provider, logger)
 	authHandler := handler.NewAuthHandler(provider, logger)
 
+	// Get download directory from env var (empty string means use temp directory)
+	downloadDir := os.Getenv("SLACK_MCP_DOWNLOAD_DIR")
+	// Pass empty string to NewFileHandler - it will create a temp directory
+	fileHandler := handler.NewFileHandler(provider, logger, downloadDir)
+
 	s.AddTool(mcp.NewTool("get_current_user",
 		mcp.WithDescription("Get information about the authenticated user (Slack API: auth.test)"),
 	), authHandler.GetCurrentUserHandler)
@@ -60,6 +67,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("limit",
 			mcp.DefaultString("1d"),
 			mcp.Description("Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 1w - 1 week, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided."),
+		),
+		mcp.WithString("fields",
+			mcp.DefaultString("msgID,userUser,realName,text,time"),
+			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'files', 'filesFull', 'cursor'. 'files' returns id:name:type:size (efficient), 'filesFull' adds URLs (verbose). Use 'all' for all fields except filesFull. Default: 'msgID,userUser,realName,text,time'"),
 		),
 	), conversationsHandler.ConversationsHistoryHandler)
 
@@ -83,6 +94,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("limit",
 			mcp.DefaultString("1d"),
 			mcp.Description("Limit of messages to fetch in format of maximum ranges of time (e.g. 1d - 1 day, 30d - 30 days, 90d - 90 days which is a default limit for free tier history) or number of messages (e.g. 50). Must be empty when 'cursor' is provided."),
+		),
+		mcp.WithString("fields",
+			mcp.DefaultString("msgID,userUser,realName,text,time"),
+			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'files', 'filesFull'. 'files' returns id:name:type:size (efficient), 'filesFull' adds URLs (verbose). Use 'all' for all fields except filesFull. Default: 'msgID,userUser,realName,text,time'"),
 		),
 	), conversationsHandler.ConversationsRepliesHandler)
 
@@ -201,7 +216,7 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 		mcp.WithString("fields",
 			mcp.DefaultString("msgID,userUser,realName,channelID,text,time"),
-			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'permalink'. Use 'all' for all fields. Default excludes 'permalink' for token efficiency."),
+			mcp.Description("Comma-separated list of fields to return. Options: 'msgID', 'userID', 'userUser', 'realName', 'channelID', 'threadTs', 'text', 'time', 'reactions', 'permalink'. Use 'all' for all available fields. Default: 'msgID,userUser,realName,channelID,text,time'. Note: 'files' and 'filesFull' are NOT supported by search_messages - use get_channel_messages or get_thread_messages to retrieve file metadata."),
 		),
 		mcp.WithString("sort",
 			mcp.DefaultString("relevance"),
@@ -342,6 +357,17 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), emojiHandler.EmojiListHandler)
 
+	s.AddTool(mcp.NewTool("download_file",
+		mcp.WithDescription("Download Slack files to local filesystem. Use file IDs from message 'files' or 'filesFull' fields. Files are downloaded with authentication and saved to the specified directory. Maximum file size: 50MB."),
+		mcp.WithString("file_ids",
+			mcp.Required(),
+			mcp.Description("Array of file IDs to download (e.g., ['F09RFRJ8QSV', 'F09R0TL40DC']). File IDs are obtained from the 'files' or 'filesFull' fields in message responses. Can also be a single file ID string."),
+		),
+		mcp.WithString("output_dir",
+			mcp.Description("Directory to save downloaded files. Defaults to './downloads' or SLACK_MCP_DOWNLOAD_DIR environment variable if set. Directory will be created if it doesn't exist."),
+		),
+	), fileHandler.DownloadFileHandler)
+
 	logger.Info("Authenticating with Slack API...",
 		zap.String("context", "console"),
 	)
@@ -385,9 +411,22 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), conversationsHandler.UsersResource)
 
 	return &MCPServer{
-		server: s,
-		logger: logger,
+		server:      s,
+		logger:      logger,
+		fileHandler: fileHandler,
 	}
+}
+
+// Cleanup removes temporary files and directories created by the server.
+// Should be called when the server exits (via defer in main.go).
+func (s *MCPServer) Cleanup() {
+	s.logger.Info("MCPServer.Cleanup() called", zap.String("context", "console"))
+	if s.fileHandler != nil {
+		s.fileHandler.Cleanup()
+	} else {
+		s.logger.Warn("No fileHandler to cleanup", zap.String("context", "console"))
+	}
+	s.logger.Info("MCPServer.Cleanup() finished", zap.String("context", "console"))
 }
 
 func (s *MCPServer) ServeSSE(addr string) *server.SSEServer {
