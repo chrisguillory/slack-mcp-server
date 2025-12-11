@@ -35,6 +35,8 @@ services:
       SLACK_MCP_ADD_REACTION_TOOL: ${SLACK_MCP_ADD_REACTION_TOOL:-}
       SLACK_MCP_DELETE_MESSAGE_TOOL: ${SLACK_MCP_DELETE_MESSAGE_TOOL:-}
       SLACK_MCP_UPDATE_MESSAGE_TOOL: ${SLACK_MCP_UPDATE_MESSAGE_TOOL:-}
+      # Bot token for posting as bot identity
+      SLACK_MCP_BOT_TOKEN: ${SLACK_MCP_BOT_TOKEN:-}
       # Logging
       SLACK_MCP_LOG_LEVEL: ${SLACK_MCP_LOG_LEVEL:-debug}
       # Downloads directory (maps to ./downloads on host)

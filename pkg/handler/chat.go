@@ -414,6 +414,218 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
+// ChatPostMessageAsBotHandler posts a message as the bot user (not as the authenticated user)
+func (ch *ChatHandler) ChatPostMessageAsBotHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ChatPostMessageAsBotHandler called", zap.Any("params", request.Params))
+
+	// Check if bot posting is enabled
+	if !ch.apiProvider.HasSlackBot() {
+		ch.logger.Error("Bot posting not available - SLACK_MCP_BOT_TOKEN not configured")
+		return mcp.NewToolResultError(
+			"Bot posting is not available. To enable it, set the SLACK_MCP_BOT_TOKEN environment variable " +
+				"to a valid Slack bot token (xoxb-...). This token is separate from your user token.",
+		), nil
+	}
+
+	params, err := ch.parseParamsToolAddMessageAsBot(request)
+	if err != nil {
+		ch.logger.Error("Failed to parse add-message-as-bot params", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to parse message parameters", err), nil
+	}
+
+	var options []slack.MsgOption
+	if params.threadTs != "" {
+		options = append(options, slack.MsgOptionTS(params.threadTs))
+	}
+
+	if params.text != "" {
+		options = append(options, slack.MsgOptionText(params.text, false))
+	}
+
+	if params.blocksJSON != "" {
+		var blocks slack.Blocks
+		if err := json.Unmarshal([]byte(params.blocksJSON), &blocks); err != nil {
+			ch.logger.Error("Failed to parse blocks JSON", zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to parse blocks JSON", err), nil
+		}
+		options = append(options, slack.MsgOptionBlocks(blocks.BlockSet...))
+	}
+
+	// Handle unfurling settings
+	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
+	if text.IsUnfurlingEnabled(params.text, unfurlOpt, ch.logger) {
+		options = append(options, slack.MsgOptionEnableLinkUnfurl())
+	} else {
+		options = append(options, slack.MsgOptionDisableLinkUnfurl())
+		options = append(options, slack.MsgOptionDisableMediaUnfurl())
+	}
+
+	ch.logger.Debug("Posting Slack message as bot",
+		zap.String("channel", params.channel),
+		zap.String("thread_ts", params.threadTs),
+		zap.Bool("has_blocks", params.blocksJSON != ""),
+	)
+
+	// Use the bot client to post
+	botClient := ch.apiProvider.SlackBot()
+	respChannel, respTimestamp, err := botClient.PostMessageContext(ctx, params.channel, options...)
+	if err != nil {
+		ch.logger.Error("Slack PostMessageContext (bot) failed", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to post message as bot", err), nil
+	}
+
+	// Optionally mark conversation as read (using regular client, not bot)
+	toolConfig := os.Getenv("SLACK_MCP_ADD_MESSAGE_MARK")
+	if toolConfig == "1" || toolConfig == "true" || toolConfig == "yes" {
+		err := ch.apiProvider.Slack().MarkConversationContext(ctx, params.channel, respTimestamp)
+		if err != nil {
+			ch.logger.Warn("Slack MarkConversationContext failed (non-fatal)", zap.Error(err))
+		}
+	}
+
+	// Fetch the posted message to return it
+	// Note: We use the regular client here since bot might not have permission to read history
+	historyParams := slack.GetConversationHistoryParameters{
+		ChannelID: respChannel,
+		Limit:     1,
+		Oldest:    respTimestamp,
+		Latest:    respTimestamp,
+		Inclusive: true,
+	}
+	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
+	if err != nil {
+		ch.logger.Warn("GetConversationHistoryContext failed (returning minimal response)", zap.Error(err))
+		// Return a minimal success response if we can't fetch the message
+		type PostResult struct {
+			Channel   string `csv:"Channel"`
+			Timestamp string `csv:"Timestamp"`
+			Status    string `csv:"Status"`
+		}
+		result := []PostResult{{
+			Channel:   respChannel,
+			Timestamp: respTimestamp,
+			Status:    "posted_as_bot",
+		}}
+		csvBytes, _ := gocsv.MarshalBytes(result)
+		return mcp.NewToolResultText(string(csvBytes)), nil
+	}
+
+	messages := ch.convertMessagesFromHistory(history.Messages, historyParams.ChannelID, false)
+	return marshalMessagesToCSV(messages)
+}
+
+// parseParamsToolAddMessageAsBot parses parameters for bot posting
+// Uses separate env var SLACK_MCP_BOT_MESSAGE_TOOL for access control
+func (ch *ChatHandler) parseParamsToolAddMessageAsBot(request mcp.CallToolRequest) (*addMessageParams, error) {
+	// Check bot-specific tool config, fallback to regular message tool config
+	toolConfig := os.Getenv("SLACK_MCP_BOT_MESSAGE_TOOL")
+	if toolConfig == "" {
+		toolConfig = os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL")
+	}
+
+	if toolConfig == "" {
+		ch.logger.Error("Bot message tool disabled by default")
+		return nil, errors.New(
+			"by default, the post_message_as_bot tool is disabled to guard Slack workspaces against accidental spamming. " +
+				"To enable it, set the SLACK_MCP_BOT_MESSAGE_TOOL (or SLACK_MCP_ADD_MESSAGE_TOOL) environment variable to true, 1, " +
+				"or comma separated list of channels to limit where the MCP can post bot messages.",
+		)
+	}
+
+	channel := request.GetString("channel_id", "")
+	if channel == "" {
+		ch.logger.Error("channel_id missing in add-message-as-bot params")
+		return nil, errors.New("channel_id must be a string")
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channel, "#") || strings.HasPrefix(channel, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channel]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channel))
+			return nil, fmt.Errorf("channel %q not found", channel)
+		}
+		channel = channelsMaps.Channels[chn].ID
+	}
+
+	// Check channel allowlist using bot-specific config
+	if !isChannelAllowedForBot(channel) {
+		ch.logger.Warn("Bot message tool not allowed for channel",
+			zap.String("channel", channel),
+			zap.String("policy", toolConfig))
+		return nil, fmt.Errorf("post_message_as_bot tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)
+	}
+
+	threadTs := request.GetString("thread_ts", "")
+	if threadTs != "" && !strings.Contains(threadTs, ".") {
+		ch.logger.Error("Invalid thread_ts format", zap.String("thread_ts", threadTs))
+		return nil, errors.New("thread_ts must be a valid timestamp in format 1234567890.123456")
+	}
+
+	msgText := request.GetString("text", "")
+	blocksJSON := request.GetString("blocks", "")
+
+	// Validate blocks JSON if provided
+	if blocksJSON != "" {
+		var rawBlocks []json.RawMessage
+		if err := json.Unmarshal([]byte(blocksJSON), &rawBlocks); err != nil {
+			ch.logger.Error("Invalid blocks JSON", zap.Error(err))
+			return nil, fmt.Errorf("invalid blocks JSON: %w", err)
+		}
+		if len(rawBlocks) > 50 {
+			ch.logger.Error("Too many blocks", zap.Int("count", len(rawBlocks)))
+			return nil, errors.New("blocks array exceeds maximum of 50 blocks")
+		}
+	}
+
+	// Require at least text or blocks
+	if msgText == "" && blocksJSON == "" {
+		ch.logger.Error("Neither text nor blocks provided")
+		return nil, errors.New("either text or blocks must be provided")
+	}
+
+	return &addMessageParams{
+		channel:    channel,
+		threadTs:   threadTs,
+		text:       msgText,
+		blocksJSON: blocksJSON,
+	}, nil
+}
+
+// isChannelAllowedForBot checks if bot posting is allowed for a channel
+func isChannelAllowedForBot(channel string) bool {
+	// First check bot-specific config
+	config := os.Getenv("SLACK_MCP_BOT_MESSAGE_TOOL")
+	if config == "" {
+		// Fall back to regular message tool config
+		config = os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL")
+	}
+
+	if config == "" {
+		return false
+	}
+	if config == "true" || config == "1" {
+		return true
+	}
+
+	items := strings.Split(config, ",")
+	isNegated := strings.HasPrefix(strings.TrimSpace(items[0]), "!")
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if isNegated {
+			if strings.TrimPrefix(item, "!") == channel {
+				return false
+			}
+		} else {
+			if item == channel {
+				return true
+			}
+		}
+	}
+	return isNegated
+}
+
 func isChannelAllowedForUpdate(channel string) bool {
 	config := os.Getenv("SLACK_MCP_UPDATE_MESSAGE_TOOL")
 	if config == "" {

@@ -118,6 +118,24 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), chatHandler.ChatPostMessageHandler)
 
+	// Post message as bot (uses separate bot token)
+	s.AddTool(mcp.NewTool("post_message_as_bot",
+		mcp.WithDescription("Post a message as the bot user (not as your personal user). Use this when you want messages to be clearly identified as coming from an AI assistant with a bot icon and 'APP' badge. Requires SLACK_MCP_BOT_TOKEN to be configured. Supports mrkdwn text and/or Block Kit blocks for rich formatting."),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
+		),
+		mcp.WithString("thread_ts",
+			mcp.Description("Unique identifier of either a thread's parent message or a message in the thread. Timestamp format: 1234567890.123456. Optional - if not provided, posts to channel; if provided, posts as reply."),
+		),
+		mcp.WithString("text",
+			mcp.Description("Message text in Slack mrkdwn format. Required if blocks not provided. When blocks are provided, serves as fallback for notifications/accessibility. Syntax: *bold*, _italic_, ~strike~, `code`, ```codeblock```, >quote, <URL|text>, <@U123> mentions, <#C123> channels."),
+		),
+		mcp.WithString("blocks",
+			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit"),
+		),
+	), chatHandler.ChatPostMessageAsBotHandler)
+
 	// Add reaction tool
 	s.AddTool(mcp.NewTool("add_reaction",
 		mcp.WithDescription("Add an emoji reaction to a message (Slack API: reactions.add)"),

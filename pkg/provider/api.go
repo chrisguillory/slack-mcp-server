@@ -142,6 +142,7 @@ type SlackAPI interface {
 
 type MCPSlackClient struct {
 	slackClient *slack.Client
+	botClient   *slack.Client // Bot client for xoxb token (posts as bot identity)
 	edgeClient  *edge.Client
 
 	authResponse *slack.AuthTestResponse
@@ -227,8 +228,34 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 		}
 	}
 
+	// Initialize bot client if SLACK_MCP_BOT_TOKEN is set
+	var botClient *slack.Client
+	botToken := os.Getenv("SLACK_MCP_BOT_TOKEN")
+	if botToken != "" {
+		// Create a separate client for bot operations
+		// Bot tokens don't need cookies, just the token
+		botClient = slack.New(botToken,
+			slack.OptionHTTPClient(httpClient),
+			slack.OptionAPIURL(authResp.URL+"api/"),
+		)
+
+		// Validate the bot token
+		botAuthResp, err := botClient.AuthTest()
+		if err != nil {
+			logger.Warn("Bot token validation failed, bot posting will be disabled",
+				zap.Error(err))
+			botClient = nil
+		} else {
+			logger.Info("Bot client initialized successfully",
+				zap.String("bot_user", botAuthResp.User),
+				zap.String("bot_id", botAuthResp.BotID),
+				zap.String("context", "console"))
+		}
+	}
+
 	return &MCPSlackClient{
 		slackClient:    slackClient,
+		botClient:      botClient,
 		edgeClient:     edgeClient,
 		authResponse:   authResponse,
 		authProvider:   authProvider,
@@ -526,6 +553,24 @@ func (c *MCPSlackClient) Raw() struct {
 		Slack: c.slackClient,
 		Edge:  c.edgeClient,
 	}
+}
+
+// BotClient returns the bot Slack client, or nil if not configured
+func (c *MCPSlackClient) BotClient() *slack.Client {
+	return c.botClient
+}
+
+// HasBotClient returns true if a bot token was configured
+func (c *MCPSlackClient) HasBotClient() bool {
+	return c.botClient != nil
+}
+
+// PostMessageAsBotContext posts a message using the bot token
+func (c *MCPSlackClient) PostMessageAsBotContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
+	if c.botClient == nil {
+		return "", "", errors.New("bot token not configured - set SLACK_MCP_BOT_TOKEN environment variable")
+	}
+	return c.botClient.PostMessageContext(ctx, channelID, options...)
 }
 
 func New(transport string, logger *zap.Logger) *ApiProvider {
@@ -1093,6 +1138,23 @@ func (ap *ApiProvider) ServerTransport() string {
 
 func (ap *ApiProvider) Slack() SlackAPI {
 	return ap.client
+}
+
+// SlackBot returns the bot client for bot-identity posting
+// Returns nil if bot token is not configured
+func (ap *ApiProvider) SlackBot() *slack.Client {
+	if mcp, ok := ap.client.(*MCPSlackClient); ok {
+		return mcp.BotClient()
+	}
+	return nil
+}
+
+// HasSlackBot returns true if bot posting is available
+func (ap *ApiProvider) HasSlackBot() bool {
+	if mcp, ok := ap.client.(*MCPSlackClient); ok {
+		return mcp.HasBotClient()
+	}
+	return false
 }
 
 func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
