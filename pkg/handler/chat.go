@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"github.com/korotovsky/slack-mcp-server/pkg/text"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/slack-go/slack"
-	slackGoUtil "github.com/takara2314/slack-go-util"
 	"go.uber.org/zap"
 )
 
@@ -29,10 +29,10 @@ func NewChatHandler(apiProvider *provider.ApiProvider, logger *zap.Logger) *Chat
 }
 
 type addMessageParams struct {
-	channel     string
-	threadTs    string
-	text        string
-	contentType string
+	channel    string
+	threadTs   string
+	text       string
+	blocksJSON string // Raw JSON array of Block Kit blocks
 }
 
 // ChatPostMessageHandler posts a message and returns it as CSV
@@ -50,21 +50,19 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 		options = append(options, slack.MsgOptionTS(params.threadTs))
 	}
 
-	switch params.contentType {
-	case "text/plain":
-		options = append(options, slack.MsgOptionDisableMarkdown())
+	// Add text if provided (also serves as fallback when blocks present)
+	if params.text != "" {
 		options = append(options, slack.MsgOptionText(params.text, false))
-	case "text/markdown":
-		blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(params.text)
-		if err != nil {
-			ch.logger.Warn("Markdown parsing error", zap.Error(err))
-			options = append(options, slack.MsgOptionDisableMarkdown())
-			options = append(options, slack.MsgOptionText(params.text, false))
-		} else {
-			options = append(options, slack.MsgOptionBlocks(blocks...))
+	}
+
+	// Add blocks if provided
+	if params.blocksJSON != "" {
+		var blocks slack.Blocks
+		if err := json.Unmarshal([]byte(params.blocksJSON), &blocks); err != nil {
+			ch.logger.Error("Failed to parse blocks JSON", zap.Error(err))
+			return mcp.NewToolResultErrorFromErr("Failed to parse blocks JSON", err), nil
 		}
-	default:
-		return mcp.NewToolResultError("content_type must be either 'text/plain' or 'text/markdown'"), nil
+		options = append(options, slack.MsgOptionBlocks(blocks.BlockSet...))
 	}
 
 	unfurlOpt := os.Getenv("SLACK_MCP_ADD_MESSAGE_UNFURLING")
@@ -78,7 +76,7 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 	ch.logger.Debug("Posting Slack message",
 		zap.String("channel", params.channel),
 		zap.String("thread_ts", params.threadTs),
-		zap.String("content_type", params.contentType),
+		zap.Bool("has_blocks", params.blocksJSON != ""),
 	)
 	respChannel, respTimestamp, err := ch.apiProvider.Slack().PostMessageContext(ctx, params.channel, options...)
 	if err != nil {
@@ -151,23 +149,36 @@ func (ch *ChatHandler) parseParamsToolAddMessage(request mcp.CallToolRequest) (*
 		return nil, errors.New("thread_ts must be a valid timestamp in format 1234567890.123456")
 	}
 
-	msgText := request.GetString("payload", "")
-	if msgText == "" {
-		ch.logger.Error("Message text missing")
-		return nil, errors.New("text must be a string")
+	// Get text (renamed from "payload")
+	msgText := request.GetString("text", "")
+
+	// Get blocks JSON string
+	blocksJSON := request.GetString("blocks", "")
+
+	// Validate blocks JSON if provided
+	if blocksJSON != "" {
+		var rawBlocks []json.RawMessage
+		if err := json.Unmarshal([]byte(blocksJSON), &rawBlocks); err != nil {
+			ch.logger.Error("Invalid blocks JSON", zap.Error(err))
+			return nil, fmt.Errorf("invalid blocks JSON: %w", err)
+		}
+		if len(rawBlocks) > 50 {
+			ch.logger.Error("Too many blocks", zap.Int("count", len(rawBlocks)))
+			return nil, errors.New("blocks array exceeds maximum of 50 blocks")
+		}
 	}
 
-	contentType := request.GetString("content_type", "text/markdown")
-	if contentType != "text/plain" && contentType != "text/markdown" {
-		ch.logger.Error("Invalid content_type", zap.String("content_type", contentType))
-		return nil, errors.New("content_type must be either 'text/plain' or 'text/markdown'")
+	// Require at least text or blocks
+	if msgText == "" && blocksJSON == "" {
+		ch.logger.Error("Neither text nor blocks provided")
+		return nil, errors.New("either text or blocks must be provided")
 	}
 
 	return &addMessageParams{
-		channel:     channel,
-		threadTs:    threadTs,
-		text:        msgText,
-		contentType: contentType,
+		channel:    channel,
+		threadTs:   threadTs,
+		text:       msgText,
+		blocksJSON: blocksJSON,
 	}, nil
 }
 
@@ -319,38 +330,53 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError("timestamp must be a valid timestamp in format 1234567890.123456"), nil
 	}
 
-	// Get the new text/payload
-	payload := request.GetString("payload", "")
-	if payload == "" {
-		ch.logger.Error("payload missing in update-message params")
-		return mcp.NewToolResultError("payload must be provided"), nil
+	// Get text (renamed from "payload")
+	msgText := request.GetString("text", "")
+
+	// Get blocks JSON string
+	blocksJSON := request.GetString("blocks", "")
+
+	// Validate blocks JSON if provided
+	if blocksJSON != "" {
+		var rawBlocks []json.RawMessage
+		if err := json.Unmarshal([]byte(blocksJSON), &rawBlocks); err != nil {
+			ch.logger.Error("Invalid blocks JSON", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf("invalid blocks JSON: %v", err)), nil
+		}
+		if len(rawBlocks) > 50 {
+			ch.logger.Error("Too many blocks", zap.Int("count", len(rawBlocks)))
+			return mcp.NewToolResultError("blocks array exceeds maximum of 50 blocks"), nil
+		}
 	}
 
-	// Get content type (default to plain text for updates to avoid block_mismatch errors)
-	contentType := request.GetString("content_type", "text/plain")
+	// Require at least text or blocks
+	if msgText == "" && blocksJSON == "" {
+		ch.logger.Error("Neither text nor blocks provided")
+		return mcp.NewToolResultError("either text or blocks must be provided"), nil
+	}
 
-	// Prepare update options
 	var options []slack.MsgOption
-	switch contentType {
-	case "text/plain":
-		options = append(options, slack.MsgOptionText(payload, false))
-	case "text/markdown":
-		blocks, err := slackGoUtil.ConvertMarkdownTextToBlocks(payload)
-		if err != nil {
-			ch.logger.Warn("Markdown parsing error, falling back to plain text", zap.Error(err))
-			options = append(options, slack.MsgOptionText(payload, false))
-		} else {
-			options = append(options, slack.MsgOptionBlocks(blocks...))
+
+	// Add text if provided (also serves as fallback when blocks present)
+	if msgText != "" {
+		options = append(options, slack.MsgOptionText(msgText, false))
+	}
+
+	// Add blocks if provided
+	if blocksJSON != "" {
+		var blocks slack.Blocks
+		if err := json.Unmarshal([]byte(blocksJSON), &blocks); err != nil {
+			ch.logger.Error("Failed to parse blocks JSON", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf("failed to parse blocks JSON: %v", err)), nil
 		}
-	default:
-		return mcp.NewToolResultError("content_type must be either 'text/plain' or 'text/markdown'"), nil
+		options = append(options, slack.MsgOptionBlocks(blocks.BlockSet...))
 	}
 
 	// Update the message
 	ch.logger.Debug("Updating Slack message",
 		zap.String("channel", channel),
 		zap.String("timestamp", timestamp),
-		zap.String("content_type", contentType),
+		zap.Bool("has_blocks", blocksJSON != ""),
 	)
 
 	respChannel, respTimestamp, _, err := ch.apiProvider.Slack().UpdateMessageContext(ctx, channel, timestamp, options...)
@@ -563,4 +589,39 @@ func (ch *ChatHandler) convertMessagesFromHistory(slackMessages []slack.Message,
 		}
 	}
 	return messages
+}
+
+// GetSlackTemplatesHandler returns the curated Block Kit templates from SLACK_TEMPLATES.md
+func (ch *ChatHandler) GetSlackTemplatesHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("GetSlackTemplatesHandler called")
+
+	// Try multiple paths to find SLACK_TEMPLATES.md
+	paths := []string{
+		"SLACK_TEMPLATES.md",                                    // Current directory
+		"../SLACK_TEMPLATES.md",                                 // Parent directory
+		"../../SLACK_TEMPLATES.md",                              // Two levels up
+		"/Users/chris/slack-mcp-server/SLACK_TEMPLATES.md",      // Absolute path (fallback)
+	}
+
+	var content []byte
+	var err error
+	var foundPath string
+
+	for _, path := range paths {
+		content, err = os.ReadFile(path)
+		if err == nil {
+			foundPath = path
+			break
+		}
+	}
+
+	if err != nil {
+		ch.logger.Error("Failed to read SLACK_TEMPLATES.md from any path", zap.Error(err))
+		return mcp.NewToolResultError("Failed to read templates file. Ensure SLACK_TEMPLATES.md exists in the project root."), nil
+	}
+
+	ch.logger.Debug("Successfully read SLACK_TEMPLATES.md",
+		zap.String("path", foundPath),
+		zap.Int("size_bytes", len(content)))
+	return mcp.NewToolResultText(string(content)), nil
 }

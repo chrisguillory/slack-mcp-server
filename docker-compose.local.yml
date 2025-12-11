@@ -14,6 +14,8 @@ services:
       - ./pkg:/app/pkg:ro
       - ./go.mod:/app/go.mod:ro
       - ./go.sum:/app/go.sum:ro
+      # Mount templates file (read-only)
+      - ./SLACK_TEMPLATES.md:/app/SLACK_TEMPLATES.md:ro
       # Mount cache directory (read-write for cache files)
       - ./cache:/app/cache
       # Mount downloads directory (read-write for downloaded files)

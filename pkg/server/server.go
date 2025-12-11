@@ -102,20 +102,19 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), conversationsHandler.ConversationsRepliesHandler)
 
 	s.AddTool(mcp.NewTool("post_message",
-		mcp.WithDescription("Post a message to a channel or DM (Slack API: chat.postMessage)"),
+		mcp.WithDescription("Post a message to a channel or DM (Slack API: chat.postMessage). Supports mrkdwn text and/or Block Kit blocks for rich formatting. When using blocks, text serves as fallback for notifications and accessibility."),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("ID of the channel in format Cxxxxxxxxxx or its name starting with #... or @... aka #general or @username_dm."),
 		),
 		mcp.WithString("thread_ts",
-			mcp.Description("Unique identifier of either a thread's parent message or a message in the thread_ts must be the timestamp in format 1234567890.123456 of an existing message with 0 or more replies. Optional, if not provided the message will be added to the channel itself, otherwise it will be added to the thread."),
+			mcp.Description("Unique identifier of either a thread's parent message or a message in the thread. Timestamp format: 1234567890.123456. Optional - if not provided, posts to channel; if provided, posts as reply."),
 		),
-		mcp.WithString("payload",
-			mcp.Description("Message payload in specified content_type format. Example: 'Hello, world!' for text/plain or '# Hello, world!' for text/markdown."),
+		mcp.WithString("text",
+			mcp.Description("Message text in Slack mrkdwn format. Required if blocks not provided. When blocks are provided, serves as fallback for notifications/accessibility. Syntax: *bold*, _italic_, ~strike~, `code`, ```codeblock```, >quote, <URL|text>, <@U123> mentions, <#C123> channels."),
 		),
-		mcp.WithString("content_type",
-			mcp.DefaultString("text/markdown"),
-			mcp.Description("Content type of the message. Default is 'text/markdown'. Allowed values: 'text/markdown', 'text/plain'."),
+		mcp.WithString("blocks",
+			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit"),
 		),
 	), chatHandler.ChatPostMessageHandler)
 
@@ -160,18 +159,17 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 
 	// Update message tool
 	s.AddTool(mcp.NewTool("update_message",
-		mcp.WithDescription("Edit/update an existing message (Slack API: chat.update)"),
+		mcp.WithDescription("Edit/update an existing message (Slack API: chat.update). Supports mrkdwn text and/or Block Kit blocks for rich formatting. When using blocks, text serves as fallback for notifications and accessibility."),
 		mcp.WithString("channel_id",
 			mcp.Required(),
 			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
 		mcp.WithString("timestamp",
 			mcp.Required(),
 			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
-		mcp.WithString("payload",
-			mcp.Required(),
-			mcp.Description("New message content in specified content_type format")),
-		mcp.WithString("content_type",
-			mcp.Description("Content type of the message. Default is 'text/plain' to avoid block_mismatch errors. Allowed values: 'text/plain', 'text/markdown'. Note: Use 'text/plain' for simple text updates, 'text/markdown' only if the original message used blocks.")),
+		mcp.WithString("text",
+			mcp.Description("New message text in Slack mrkdwn format. Required if blocks not provided. When blocks are provided, serves as fallback for notifications/accessibility. Syntax: *bold*, _italic_, ~strike~, `code`, ```codeblock```, >quote, <URL|text>, <@U123> mentions, <#C123> channels.")),
+		mcp.WithString("blocks",
+			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit")),
 	), chatHandler.ChatUpdateHandler)
 
 	s.AddTool(mcp.NewTool("search_messages",
@@ -367,6 +365,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Directory to save downloaded files. Defaults to './downloads' or SLACK_MCP_DOWNLOAD_DIR environment variable if set. Directory will be created if it doesn't exist."),
 		),
 	), fileHandler.DownloadFileHandler)
+
+	s.AddTool(mcp.NewTool("get_slack_templates",
+		mcp.WithDescription("Get curated Block Kit templates for professional Slack messages. Returns the SLACK_TEMPLATES.md file with examples for status updates, alerts, meeting summaries, announcements, requests, reports, errors, and empty states. Use these templates as a starting point when composing well-formatted messages."),
+	), chatHandler.GetSlackTemplatesHandler)
 
 	logger.Info("Authenticating with Slack API...",
 		zap.String("context", "console"),
