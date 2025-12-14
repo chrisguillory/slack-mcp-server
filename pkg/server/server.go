@@ -116,6 +116,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		mcp.WithString("blocks",
 			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit"),
 		),
+		mcp.WithBoolean("reply_broadcast",
+			mcp.Description("When replying to a thread (thread_ts provided), set to true to also send the reply to the main channel (visible to everyone). Similar to Slack's 'also send to channel' checkbox. Default: false. Only applies when thread_ts is set."),
+			mcp.DefaultBool(false),
+		),
 	), chatHandler.ChatPostMessageHandler)
 
 	// Post message as bot (uses separate bot token)
@@ -133,6 +137,10 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 		mcp.WithString("blocks",
 			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit"),
+		),
+		mcp.WithBoolean("reply_broadcast",
+			mcp.Description("When replying to a thread (thread_ts provided), set to true to also send the reply to the main channel (visible to everyone). Similar to Slack's 'also send to channel' checkbox. Default: false. Only applies when thread_ts is set."),
+			mcp.DefaultBool(false),
 		),
 	), chatHandler.ChatPostMessageAsBotHandler)
 

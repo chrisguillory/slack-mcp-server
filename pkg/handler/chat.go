@@ -46,8 +46,15 @@ func (ch *ChatHandler) ChatPostMessageHandler(ctx context.Context, request mcp.C
 	}
 
 	var options []slack.MsgOption
+	// Add reply_broadcast support
 	if params.threadTs != "" {
 		options = append(options, slack.MsgOptionTS(params.threadTs))
+
+		// Check if reply should be broadcast to channel
+		replyBroadcast := request.GetBool("reply_broadcast", false)
+		if replyBroadcast {
+			options = append(options, slack.MsgOptionBroadcast())
+		}
 	}
 
 	// Add text if provided (also serves as fallback when blocks present)
@@ -434,8 +441,15 @@ func (ch *ChatHandler) ChatPostMessageAsBotHandler(ctx context.Context, request 
 	}
 
 	var options []slack.MsgOption
+	// Add reply_broadcast support
 	if params.threadTs != "" {
 		options = append(options, slack.MsgOptionTS(params.threadTs))
+
+		// Check if reply should be broadcast to channel
+		replyBroadcast := request.GetBool("reply_broadcast", false)
+		if replyBroadcast {
+			options = append(options, slack.MsgOptionBroadcast())
+		}
 	}
 
 	if params.text != "" {

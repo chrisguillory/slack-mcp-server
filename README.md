@@ -62,6 +62,7 @@ Post a message to a channel or DM
   - `thread_ts` (string, optional): Unique identifier of either a thread's parent message or a message in the thread_ts must be the timestamp in format `1234567890.123456` of an existing message with 0 or more replies. Optional, if not provided the message will be added to the channel itself, otherwise it will be added to the thread.
   - `text` (string): Message text in Slack mrkdwn format. Required if blocks not provided.
   - `blocks` (string, optional): Block Kit blocks as JSON array string for rich layouts.
+  - `reply_broadcast` (boolean, optional, default: false): When replying to a thread (thread_ts provided), set to true to also post the reply to the main channel. Equivalent to checking "also send to #channel-name" in Slack's UI. Use sparingly for important updates. Ignored if thread_ts is not provided.
 
 ### 4. post_message_as_bot
 Post a message as a bot user instead of the authenticated user
@@ -73,6 +74,7 @@ Post a message as a bot user instead of the authenticated user
   - `thread_ts` (string, optional): Unique identifier of either a thread's parent message or a message in the thread. Timestamp format: `1234567890.123456`. Optional - if not provided, posts to channel; if provided, posts as reply.
   - `text` (string): Message text in Slack mrkdwn format. Required if blocks not provided. Syntax: `*bold*`, `_italic_`, `~strike~`, `` `code` ``, `>quote`, `<URL|text>`, `<@U123>` mentions, `<#C123>` channels.
   - `blocks` (string, optional): Block Kit blocks as JSON array string for rich layouts. Max 50 blocks.
+  - `reply_broadcast` (boolean, optional, default: false): When replying to a thread (thread_ts provided), set to true to also post the reply to the main channel. Equivalent to checking "also send to #channel-name" in Slack's UI. Use sparingly for important updates. Ignored if thread_ts is not provided.
 - **Use Cases:**
   - When messages should be clearly identified as coming from an AI assistant
   - When you don't want messages to appear from your personal account
