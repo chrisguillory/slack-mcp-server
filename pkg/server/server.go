@@ -198,6 +198,21 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks. Common blocks: {\"type\":\"divider\"} for horizontal rules, {\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"content\"}} for text sections, {\"type\":\"header\",\"text\":{\"type\":\"plain_text\",\"text\":\"title\"}} for headers. See: https://api.slack.com/block-kit")),
 	), chatHandler.ChatUpdateHandler)
 
+	// Update message as bot tool
+	s.AddTool(mcp.NewTool("update_message_as_bot",
+		mcp.WithDescription("Edit/update an existing bot message (Slack API: chat.update). Use this to update messages previously posted with post_message_as_bot. Requires SLACK_MCP_BOT_TOKEN to be configured. Supports mrkdwn text and/or Block Kit blocks for rich formatting."),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+		mcp.WithString("text",
+			mcp.Description("New message text in Slack mrkdwn format. Required if blocks not provided. When blocks are provided, serves as fallback for notifications/accessibility.")),
+		mcp.WithString("blocks",
+			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks.")),
+	), chatHandler.ChatUpdateMessageAsBotHandler)
+
 	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search for messages across channels and DMs (Slack API: search.messages)"),
 		mcp.WithString("search_query",

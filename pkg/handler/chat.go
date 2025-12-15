@@ -421,6 +421,174 @@ func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallTo
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
+// ChatUpdateMessageAsBotHandler updates an existing bot message and returns it as CSV
+func (ch *ChatHandler) ChatUpdateMessageAsBotHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ChatUpdateMessageAsBotHandler called", zap.Any("params", request.Params))
+
+	// Check if bot client is available
+	if !ch.apiProvider.HasSlackBot() {
+		ch.logger.Error("Bot client not available - SLACK_MCP_BOT_TOKEN not configured")
+		return mcp.NewToolResultError(
+			"Bot updating is not available. To enable it, set the SLACK_MCP_BOT_TOKEN environment variable " +
+				"to a valid Slack bot token (xoxb-...). This token is separate from your user token.",
+		), nil
+	}
+
+	// Check if update-message-as-bot tool is enabled (fallback to SLACK_MCP_UPDATE_MESSAGE_TOOL)
+	toolConfig := os.Getenv("SLACK_MCP_BOT_UPDATE_MESSAGE_TOOL")
+	if toolConfig == "" {
+		toolConfig = os.Getenv("SLACK_MCP_UPDATE_MESSAGE_TOOL")
+	}
+	if toolConfig == "" {
+		ch.logger.Error("Update-message-as-bot tool disabled by default")
+		return mcp.NewToolResultError(
+			"by default, the update_message_as_bot tool is disabled to prevent accidental message modification. " +
+				"To enable it, set the SLACK_MCP_BOT_UPDATE_MESSAGE_TOOL or SLACK_MCP_UPDATE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
+				"to limit where the MCP can update messages, e.g. 'SLACK_MCP_BOT_UPDATE_MESSAGE_TOOL=C1234567890,D0987654321', " +
+				"'SLACK_MCP_BOT_UPDATE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_BOT_UPDATE_MESSAGE_TOOL=true' for all channels and DMs",
+		), nil
+	}
+
+	// Get and validate channel_id
+	channel := request.GetString("channel_id", "")
+	if channel == "" {
+		ch.logger.Error("channel_id missing in update-message-as-bot params")
+		return mcp.NewToolResultError("channel_id must be provided"), nil
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channel, "#") || strings.HasPrefix(channel, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channel]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channel))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channel)), nil
+		}
+		channel = channelsMaps.Channels[chn].ID
+	} else if strings.HasPrefix(channel, "U") {
+		ch.logger.Error("Invalid channel format - user ID provided instead of DM conversation ID",
+			zap.String("user_id", channel))
+		return mcp.NewToolResultError(
+			fmt.Sprintf("Invalid channel_id format: %s appears to be a user ID. "+
+				"To update messages in DMs, use the DM conversation ID (starts with 'D') "+
+				"instead of the user ID (starts with 'U'). "+
+				"You can find the DM conversation ID in the channel_id field of messages from that DM.",
+				channel),
+		), nil
+	}
+
+	// Check if channel is allowed for updates (reuse existing function)
+	if !isChannelAllowedForUpdate(channel) {
+		ch.logger.Warn("Update-message-as-bot tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
+		return mcp.NewToolResultError(fmt.Sprintf("update_message_as_bot tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
+	}
+
+	// Get and validate timestamp
+	timestamp := request.GetString("timestamp", "")
+	if timestamp == "" {
+		ch.logger.Error("timestamp missing in update-message-as-bot params")
+		return mcp.NewToolResultError("timestamp must be provided"), nil
+	}
+	if !strings.Contains(timestamp, ".") {
+		ch.logger.Error("Invalid timestamp format", zap.String("timestamp", timestamp))
+		return mcp.NewToolResultError("timestamp must be a valid timestamp in format 1234567890.123456"), nil
+	}
+
+	// Get text and blocks
+	msgText := request.GetString("text", "")
+	blocksJSON := request.GetString("blocks", "")
+
+	// Validate blocks JSON if provided
+	if blocksJSON != "" {
+		var rawBlocks []json.RawMessage
+		if err := json.Unmarshal([]byte(blocksJSON), &rawBlocks); err != nil {
+			ch.logger.Error("Invalid blocks JSON", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf("invalid blocks JSON: %v", err)), nil
+		}
+		if len(rawBlocks) > 50 {
+			ch.logger.Error("Too many blocks", zap.Int("count", len(rawBlocks)))
+			return mcp.NewToolResultError("blocks array exceeds maximum of 50 blocks"), nil
+		}
+	}
+
+	// Require at least text or blocks
+	if msgText == "" && blocksJSON == "" {
+		ch.logger.Error("Neither text nor blocks provided")
+		return mcp.NewToolResultError("either text or blocks must be provided"), nil
+	}
+
+	var options []slack.MsgOption
+
+	// Add text if provided
+	if msgText != "" {
+		options = append(options, slack.MsgOptionText(msgText, false))
+	}
+
+	// Add blocks if provided
+	if blocksJSON != "" {
+		var blocks slack.Blocks
+		if err := json.Unmarshal([]byte(blocksJSON), &blocks); err != nil {
+			ch.logger.Error("Failed to parse blocks JSON", zap.Error(err))
+			return mcp.NewToolResultError(fmt.Sprintf("failed to parse blocks JSON: %v", err)), nil
+		}
+		options = append(options, slack.MsgOptionBlocks(blocks.BlockSet...))
+	}
+
+	// Update the message using the bot client
+	ch.logger.Debug("Updating Slack message as bot",
+		zap.String("channel", channel),
+		zap.String("timestamp", timestamp),
+		zap.Bool("has_blocks", blocksJSON != ""),
+	)
+
+	botClient := ch.apiProvider.SlackBot()
+	respChannel, respTimestamp, _, err := botClient.UpdateMessageContext(ctx, channel, timestamp, options...)
+	if err != nil {
+		ch.logger.Error("Slack UpdateMessageContext (bot) failed", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to update message as bot", err), nil
+	}
+
+	// Fetch the updated message to return it (use regular client since bot may not have history permission)
+	historyParams := slack.GetConversationHistoryParameters{
+		ChannelID: respChannel,
+		Latest:    respTimestamp,
+		Limit:     1,
+		Inclusive: true,
+	}
+	history, err := ch.apiProvider.Slack().GetConversationHistoryContext(ctx, &historyParams)
+	if err != nil {
+		ch.logger.Warn("GetConversationHistoryContext failed after bot update (returning minimal response)", zap.Error(err))
+		// Return a minimal success response if we can't fetch the message
+		type UpdateResult struct {
+			Channel   string `csv:"Channel"`
+			Timestamp string `csv:"Timestamp"`
+			Status    string `csv:"Status"`
+		}
+		result := []UpdateResult{{
+			Channel:   respChannel,
+			Timestamp: respTimestamp,
+			Status:    "updated_as_bot",
+		}}
+		csvBytes, _ := gocsv.MarshalBytes(result)
+		return mcp.NewToolResultText(string(csvBytes)), nil
+	}
+
+	if len(history.Messages) == 0 {
+		ch.logger.Error("No message found after bot update", zap.String("channel", respChannel), zap.String("timestamp", respTimestamp))
+		return mcp.NewToolResultError("Updated message not found"), nil
+	}
+
+	// Convert message to CSV format
+	messages := ch.convertMessagesFromHistory(history.Messages, respChannel, false)
+	csvBytes, err := marshalMessagesToCSVBytes(messages)
+	if err != nil {
+		ch.logger.Error("Failed to marshal updated message to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format updated message", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
+}
+
 // ChatPostMessageAsBotHandler posts a message as the bot user (not as the authenticated user)
 func (ch *ChatHandler) ChatPostMessageAsBotHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ch.logger.Debug("ChatPostMessageAsBotHandler called", zap.Any("params", request.Params))
