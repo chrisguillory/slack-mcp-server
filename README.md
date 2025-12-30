@@ -80,7 +80,20 @@ Post a message as a bot user instead of the authenticated user
   - When you don't want messages to appear from your personal account
   - When you need visual distinction (bot icon, "APP" badge) for AI-generated content
 
-### 5. search_messages
+### 5. delete_message_as_bot
+Delete a message that was posted by the bot
+
+> **Note:** This tool requires a separate bot token (`SLACK_MCP_BOT_TOKEN`) to be configured. Only messages posted by the bot can be deleted. Uses the same channel restrictions as `delete_message` (via `SLACK_MCP_BOT_DELETE_MESSAGE_TOOL` or `SLACK_MCP_DELETE_MESSAGE_TOOL`).
+
+- **Parameters:**
+  - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
+  - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
+- **Use Cases:**
+  - Cleaning up temporary bot notifications
+  - Removing outdated bot messages
+  - Bot self-cleanup workflows
+
+### 6. search_messages
 Search for messages across channels and DMs
 - **Parameters:**
   - `search_query` (string, optional): Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored.
@@ -107,7 +120,7 @@ Search for messages across channels and DMs
   - `# Item range: A-B` - Range of items in the current page (when available)
   - `# Next cursor: C` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 6. list_channels
+### 7. list_channels
 List channels, DMs, and group DMs
 - **Parameters:**
   - `query` (string, optional): Search for channels by name. Searches in channel name, topic, and purpose (case-insensitive)
@@ -123,7 +136,7 @@ List channels, DMs, and group DMs
   - `# Returned in this page: Y` - Number of channels in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 7. list_users
+### 8. list_users
 List users in the workspace
 - **Parameters:**
   - `query` (string, optional): Search for users by name. Searches in username, real name, and display name (case-insensitive)
@@ -139,7 +152,7 @@ List users in the workspace
   - `# Returned in this page: Y` - Number of users in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 8. list_emojis
+### 9. list_emojis
 List available emojis/reactions
 - **Parameters:**
   - `query` (string, optional): Search for emojis by name (case-insensitive)
@@ -152,21 +165,21 @@ List available emojis/reactions
   - `# Returned in this page: Y` - Number of emojis in this response
   - `# Next cursor: Z` - Cursor for the next page, or "(none - last page)" if no more pages
 
-### 9. add_reaction
+### 10. add_reaction
 Add an emoji reaction to a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
-### 10. remove_reaction
+### 11. remove_reaction
 Remove an emoji reaction from a message
 - **Parameters:**
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
   - `emoji` (string, required): Emoji name without colons (e.g., thumbsup, rocket)
 
-### 11. delete_message
+### 12. delete_message
 Delete a message from a channel
 
 > **Note:** Deleting messages is disabled by default for safety. To enable, set the `SLACK_MCP_DELETE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, deletion is enabled only for those specific channels. See the Environment Variables section below for details.
@@ -175,7 +188,7 @@ Delete a message from a channel
   - `channel_id` (string, required): Channel ID (C...) or name (#general, @user_dm)
   - `timestamp` (string, required): Message timestamp (e.g., 1234567890.123456)
 
-### 12. update_message
+### 13. update_message
 Edit/update an existing message
 
 > **Note:** Updating messages is disabled by default for safety. To enable, set the `SLACK_MCP_UPDATE_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, updating is enabled only for those specific channels. See the Environment Variables section below for details.
@@ -186,7 +199,7 @@ Edit/update an existing message
   - `payload` (string, required): New message content in specified content_type format
   - `content_type` (string, default: "text/plain"): Content type of the message. Allowed values: 'text/plain', 'text/markdown'. Use 'text/plain' for simple text updates to avoid block_mismatch errors.
 
-### 13. get_current_user
+### 14. get_current_user
 Get information about the authenticated user
 
 - **Parameters:** None
@@ -199,7 +212,7 @@ Get information about the authenticated user
   - `workspace_url`: Full URL of the workspace
   - `enterprise_id`: Enterprise Grid ID (if applicable)
 
-### 14. list_channel_members
+### 15. list_channel_members
 List members of a channel, DM, or group DM
 
 - **Parameters:**
@@ -221,7 +234,7 @@ List members of a channel, DM, or group DM
   - For channels and group DMs, uses conversations.members API
   - Supports Enterprise Grid workspaces with automatic fallback
 
-### 15. get_user_info
+### 16. get_user_info
 Get detailed information about a specific user
 
 - **Parameters:**
@@ -242,7 +255,7 @@ Get detailed information about a specific user
   - Combines data from users.info and users.getPresence APIs
   - Some fields may be empty depending on workspace permissions
 
-### 16. create_channel
+### 17. create_channel
 Create a new public or private channel
 
 - **Parameters:**
@@ -264,7 +277,7 @@ Create a new public or private channel
   - Topic and purpose are set via separate API calls after creation
   - Creating private channels may require additional permissions
 
-### 17. archive_channel
+### 18. archive_channel
 Archive a channel to preserve its history while removing it from active use
 
 - **Parameters:**
@@ -317,6 +330,7 @@ See the project documentation for detailed installation and configuration instru
 | `SLACK_MCP_UPDATE_MESSAGE_TOOL`   | No        | `nil`                     | Enable message updating via `update_message` by setting it to true for all channels, a comma-separated list of channel IDs to whitelist specific channels, or use `!` before a channel ID to allow all except specified ones. |
 | `SLACK_MCP_BOT_TOKEN`             | No        | `nil`                     | Bot token (`xoxb-...`) for posting messages as a bot identity via `post_message_as_bot`. Separate from user authentication tokens. |
 | `SLACK_MCP_BOT_MESSAGE_TOOL`      | No        | `nil`                     | Enable bot message posting via `post_message_as_bot`. Falls back to `SLACK_MCP_ADD_MESSAGE_TOOL` if not set. Same format: true, comma-separated channel IDs, or `!` prefix for exclusions. |
+| `SLACK_MCP_BOT_DELETE_MESSAGE_TOOL` | No      | `nil`                     | Enable bot message deletion via `delete_message_as_bot`. Falls back to `SLACK_MCP_DELETE_MESSAGE_TOOL` if not set. Same format: true, comma-separated channel IDs, or `!` prefix for exclusions. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |

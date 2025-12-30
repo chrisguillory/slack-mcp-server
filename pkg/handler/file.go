@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxFileSize     = 50 * 1024 * 1024 // 50MB
+	maxFileSize        = 50 * 1024 * 1024 // 50MB
 	defaultDownloadDir = "./downloads"
 )
 
@@ -27,12 +27,12 @@ type FileHandler struct {
 }
 
 type FileDownloadResult struct {
-	FileID     string `json:"file_id" csv:"file_id"`
-	Name       string `json:"name" csv:"name"`
-	Type       string `json:"type" csv:"type"`
-	Size       int    `json:"size" csv:"size"`
-	LocalPath  string `json:"local_path" csv:"local_path"`
-	Status     string `json:"status" csv:"status"`
+	FileID    string `json:"file_id" csv:"file_id"`
+	Name      string `json:"name" csv:"name"`
+	Type      string `json:"type" csv:"type"`
+	Size      int    `json:"size" csv:"size"`
+	LocalPath string `json:"local_path" csv:"local_path"`
+	Status    string `json:"status" csv:"status"`
 }
 
 func NewFileHandler(apiProvider *provider.ApiProvider, logger *zap.Logger, downloadDir string) *FileHandler {

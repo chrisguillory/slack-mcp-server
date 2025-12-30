@@ -275,6 +275,104 @@ func (ch *ChatHandler) ChatDeleteMessageHandler(ctx context.Context, request mcp
 	return mcp.NewToolResultText(string(csvBytes)), nil
 }
 
+// ChatDeleteMessageAsBotHandler deletes a bot message from a channel
+func (ch *ChatHandler) ChatDeleteMessageAsBotHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ch.logger.Debug("ChatDeleteMessageAsBotHandler called", zap.Any("params", request.Params))
+
+	// Check if bot client is available
+	if !ch.apiProvider.HasSlackBot() {
+		ch.logger.Error("Bot client not available - SLACK_MCP_BOT_TOKEN not configured")
+		return mcp.NewToolResultError(
+			"Bot deletion is not available. To enable it, set the SLACK_MCP_BOT_TOKEN environment variable " +
+				"to a valid Slack bot token (xoxb-...). This token is separate from your user token.",
+		), nil
+	}
+
+	// Check if delete-message-as-bot tool is enabled (fallback to SLACK_MCP_DELETE_MESSAGE_TOOL)
+	toolConfig := os.Getenv("SLACK_MCP_BOT_DELETE_MESSAGE_TOOL")
+	if toolConfig == "" {
+		toolConfig = os.Getenv("SLACK_MCP_DELETE_MESSAGE_TOOL")
+	}
+	if toolConfig == "" {
+		ch.logger.Error("Delete-message-as-bot tool disabled by default")
+		return mcp.NewToolResultError(
+			"by default, the delete_message_as_bot tool is disabled to prevent accidental message deletion. " +
+				"To enable it, set the SLACK_MCP_BOT_DELETE_MESSAGE_TOOL or SLACK_MCP_DELETE_MESSAGE_TOOL environment variable to true, 1, or comma separated list of channels " +
+				"to limit where the MCP can delete messages, e.g. 'SLACK_MCP_BOT_DELETE_MESSAGE_TOOL=C1234567890,D0987654321', " +
+				"'SLACK_MCP_BOT_DELETE_MESSAGE_TOOL=!C1234567890' to enable all except one or 'SLACK_MCP_BOT_DELETE_MESSAGE_TOOL=true' for all channels and DMs",
+		), nil
+	}
+
+	// Get and validate channel_id
+	channel := request.GetString("channel_id", "")
+	if channel == "" {
+		ch.logger.Error("channel_id missing in delete-message-as-bot params")
+		return mcp.NewToolResultError("channel_id must be provided"), nil
+	}
+
+	// Handle channel name resolution
+	if strings.HasPrefix(channel, "#") || strings.HasPrefix(channel, "@") {
+		channelsMaps := ch.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channel]
+		if !ok {
+			ch.logger.Error("Channel not found", zap.String("channel", channel))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channel)), nil
+		}
+		channel = channelsMaps.Channels[chn].ID
+	}
+
+	// Check if channel is allowed for bot deletion
+	if !isChannelAllowedForBotDeletion(channel) {
+		ch.logger.Warn("Delete-message-as-bot tool not allowed for channel", zap.String("channel", channel), zap.String("policy", toolConfig))
+		return mcp.NewToolResultError(fmt.Sprintf("delete_message_as_bot tool is not allowed for channel %q, applied policy: %s", channel, toolConfig)), nil
+	}
+
+	// Get and validate timestamp
+	timestamp := request.GetString("timestamp", "")
+	if timestamp == "" {
+		ch.logger.Error("timestamp missing in delete-message-as-bot params")
+		return mcp.NewToolResultError("timestamp must be provided"), nil
+	}
+	if !strings.Contains(timestamp, ".") {
+		ch.logger.Error("Invalid timestamp format", zap.String("timestamp", timestamp))
+		return mcp.NewToolResultError("timestamp must be a valid timestamp in format 1234567890.123456"), nil
+	}
+
+	// Delete the message using bot client
+	ch.logger.Debug("Deleting Slack message as bot",
+		zap.String("channel", channel),
+		zap.String("timestamp", timestamp),
+	)
+
+	botClient := ch.apiProvider.SlackBot()
+	respChannel, respTimestamp, err := botClient.DeleteMessageContext(ctx, channel, timestamp)
+	if err != nil {
+		ch.logger.Error("Slack DeleteMessageContext (bot) failed", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to delete message as bot", err), nil
+	}
+
+	// Return a simple success message in CSV format
+	type DeleteResult struct {
+		Channel   string `csv:"Channel"`
+		Timestamp string `csv:"Timestamp"`
+		Status    string `csv:"Status"`
+	}
+
+	result := []DeleteResult{{
+		Channel:   respChannel,
+		Timestamp: respTimestamp,
+		Status:    "deleted_as_bot",
+	}}
+
+	csvBytes, err := gocsv.MarshalBytes(result)
+	if err != nil {
+		ch.logger.Error("Failed to marshal delete result to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format delete result", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
+}
+
 // ChatUpdateHandler updates an existing message and returns it as CSV
 func (ch *ChatHandler) ChatUpdateHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	ch.logger.Debug("ChatUpdateHandler called", zap.Any("params", request.Params))
@@ -881,6 +979,36 @@ func isChannelAllowedForDeletion(channel string) bool {
 	return !isNegated
 }
 
+// isChannelAllowedForBotDeletion checks if bot deletion is allowed for a channel
+// It first checks SLACK_MCP_BOT_DELETE_MESSAGE_TOOL, then falls back to SLACK_MCP_DELETE_MESSAGE_TOOL
+func isChannelAllowedForBotDeletion(channel string) bool {
+	config := os.Getenv("SLACK_MCP_BOT_DELETE_MESSAGE_TOOL")
+	if config == "" {
+		config = os.Getenv("SLACK_MCP_DELETE_MESSAGE_TOOL")
+	}
+	if config == "" {
+		return false // Default to disabled
+	}
+	if config == "true" || config == "1" {
+		return true
+	}
+	items := strings.Split(config, ",")
+	isNegated := strings.HasPrefix(strings.TrimSpace(items[0]), "!")
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if isNegated {
+			if strings.TrimPrefix(item, "!") == channel {
+				return false
+			}
+		} else {
+			if item == channel {
+				return true
+			}
+		}
+	}
+	return !isNegated
+}
+
 func (ch *ChatHandler) convertMessagesFromHistory(slackMessages []slack.Message, channel string, includeActivity bool) []Message {
 	usersMap := ch.apiProvider.ProvideUsersMap()
 	var messages []Message
@@ -991,10 +1119,10 @@ func (ch *ChatHandler) GetSlackTemplatesHandler(ctx context.Context, request mcp
 
 	// Try multiple paths to find SLACK_TEMPLATES.md
 	paths := []string{
-		"SLACK_TEMPLATES.md",                                    // Current directory
-		"../SLACK_TEMPLATES.md",                                 // Parent directory
-		"../../SLACK_TEMPLATES.md",                              // Two levels up
-		"/Users/chris/slack-mcp-server/SLACK_TEMPLATES.md",      // Absolute path (fallback)
+		"SLACK_TEMPLATES.md",                               // Current directory
+		"../SLACK_TEMPLATES.md",                            // Parent directory
+		"../../SLACK_TEMPLATES.md",                         // Two levels up
+		"/Users/chris/slack-mcp-server/SLACK_TEMPLATES.md", // Absolute path (fallback)
 	}
 
 	var content []byte

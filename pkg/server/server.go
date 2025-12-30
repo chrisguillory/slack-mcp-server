@@ -213,6 +213,17 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Block Kit blocks as JSON array string for rich layouts. Max 50 blocks.")),
 	), chatHandler.ChatUpdateMessageAsBotHandler)
 
+	// Delete message as bot tool
+	s.AddTool(mcp.NewTool("delete_message_as_bot",
+		mcp.WithDescription("Delete a bot message (Slack API: chat.delete). Use this to delete messages previously posted with post_message_as_bot. Requires SLACK_MCP_BOT_TOKEN to be configured."),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...) or name (#general, @user_dm)")),
+		mcp.WithString("timestamp",
+			mcp.Required(),
+			mcp.Description("Message timestamp (e.g., 1234567890.123456)")),
+	), chatHandler.ChatDeleteMessageAsBotHandler)
+
 	s.AddTool(mcp.NewTool("search_messages",
 		mcp.WithDescription("Search for messages across channels and DMs (Slack API: search.messages)"),
 		mcp.WithString("search_query",
