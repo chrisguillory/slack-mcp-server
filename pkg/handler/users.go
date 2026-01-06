@@ -41,6 +41,63 @@ func NewUsersHandler(apiProvider *provider.ApiProvider, logger *zap.Logger) *Use
 	}
 }
 
+// UserStats holds counts for transparency headers
+type UserStats struct {
+	TotalInCache          int
+	OrgMemberActive       int
+	OrgMemberDeactivated  int
+	ExternalActive        int
+	ExternalDeactivated   int
+	Bots                  int
+	EnterpriseName        string
+}
+
+// getEnterpriseContext fetches the current enterprise ID and name for classification.
+// Returns enterpriseID, enterpriseName. Logs warning on error but does not fail.
+func (uh *UsersHandler) getEnterpriseContext() (string, string) {
+	authResp, err := uh.apiProvider.Slack().AuthTest()
+	if err != nil {
+		uh.logger.Warn("AuthTest failed, enterprise classification may be inaccurate", zap.Error(err))
+		return "", ""
+	}
+	if authResp == nil {
+		return "", ""
+	}
+	return authResp.EnterpriseID, ""
+}
+
+// classifyUser determines if a user is an org member, external, or bot
+// Returns: isOrgMember, isExternal, isBot
+func classifyUser(user slack.User, currentEnterpriseID string) (bool, bool, bool) {
+	if user.IsBot {
+		return false, false, true
+	}
+
+	// Org member: has enterprise_user.enterprise_id matching current org
+	if user.Enterprise.EnterpriseID == currentEnterpriseID && currentEnterpriseID != "" {
+		return true, false, false
+	}
+
+	// External user: has team_id set to a different org's E-ID (Slack Connect)
+	// OR has no enterprise_id (legacy external user)
+	if user.TeamID != "" && strings.HasPrefix(user.TeamID, "E") {
+		return false, true, false
+	}
+
+	// If we have an enterprise ID set but doesn't match current, it's external
+	if user.Enterprise.EnterpriseID != "" && user.Enterprise.EnterpriseID != currentEnterpriseID {
+		return false, true, false
+	}
+
+	// In Enterprise Grid, users without enterprise data are external (Slack Connect)
+	if currentEnterpriseID != "" && user.Enterprise.EnterpriseID == "" {
+		return false, true, false
+	}
+
+	// Default to org member for non-enterprise workspaces
+	return true, false, false
+}
+
 func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	uh.logger.Debug("UsersHandler called")
 
@@ -48,6 +105,10 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 		uh.logger.Error("API provider not ready", zap.Error(err))
 		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
 	}
+
+	// Get current enterprise ID for org member/external classification
+	currentEnterpriseID, _ := uh.getEnterpriseContext()
+	enterpriseName := ""
 
 	// Get parameters with defaults
 	query := request.GetString("query", "")
@@ -57,6 +118,7 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 	fields := request.GetString("fields", "id,name,real_name,status")
 	includeDeleted := request.GetBool("include_deleted", false)
 	includeBots := request.GetBool("include_bots", true)
+	userType := request.GetString("user_type", "all")
 
 	uh.logger.Debug("Request parameters",
 		zap.String("query", query),
@@ -66,6 +128,7 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 		zap.String("fields", fields),
 		zap.Bool("include_deleted", includeDeleted),
 		zap.Bool("include_bots", includeBots),
+		zap.String("user_type", userType),
 	)
 
 	// Parse fields parameter
@@ -82,6 +145,11 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 		requestedFields["time_zone"] = true
 		requestedFields["title"] = true
 		requestedFields["phone"] = true
+		// Enterprise fields
+		requestedFields["enterprise_id"] = true
+		requestedFields["enterprise_name"] = true
+		requestedFields["team_id"] = true
+		requestedFields["is_org_member"] = true
 	} else {
 		for _, field := range strings.Split(fields, ",") {
 			field = strings.TrimSpace(strings.ToLower(field))
@@ -118,6 +186,36 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 	allUsers := usersCache.Users
 	uh.logger.Debug("Total users available", zap.Int("count", len(allUsers)))
 
+	// Count all users by type BEFORE filtering (for transparency headers)
+	stats := UserStats{TotalInCache: len(allUsers)}
+	for _, user := range allUsers {
+		isOrgMember, isExternal, isBot := classifyUser(user, currentEnterpriseID)
+
+		if isBot {
+			stats.Bots++
+			continue
+		}
+
+		if isOrgMember {
+			if user.Deleted {
+				stats.OrgMemberDeactivated++
+			} else {
+				stats.OrgMemberActive++
+			}
+			// Capture enterprise name from an org member
+			if enterpriseName == "" && user.Enterprise.EnterpriseName != "" {
+				enterpriseName = user.Enterprise.EnterpriseName
+			}
+		} else if isExternal {
+			if user.Deleted {
+				stats.ExternalDeactivated++
+			} else {
+				stats.ExternalActive++
+			}
+		}
+	}
+	stats.EnterpriseName = enterpriseName
+
 	// Apply search query if provided
 	var searchResults map[string]slack.User
 	if query != "" {
@@ -146,8 +244,33 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 	// Filter users based on parameters
 	var filteredUsers []slack.User
 	for _, user := range allUsers {
-		// Skip deleted users if not included
-		if user.Deleted && !includeDeleted {
+		// Apply user_type filter first (enterprise-level filtering)
+		// This allows for targeted queries like "show only org members" or "show only external"
+		switch userType {
+		case "org_member":
+			isOrgMember, _, _ := classifyUser(user, currentEnterpriseID)
+			if !isOrgMember {
+				continue
+			}
+		case "external":
+			_, isExternal, _ := classifyUser(user, currentEnterpriseID)
+			if !isExternal {
+				continue
+			}
+		case "deleted":
+			// Show deactivated org members only (former employees)
+			isOrgMember, _, _ := classifyUser(user, currentEnterpriseID)
+			if !isOrgMember || !user.Deleted {
+				continue
+			}
+		case "all":
+			// No filtering, include all user types
+		default:
+			// Unknown value, treat as "all"
+		}
+
+		// Skip deleted users if not included (unless user_type=deleted explicitly requests them)
+		if user.Deleted && !includeDeleted && userType != "deleted" {
 			continue
 		}
 
@@ -227,6 +350,11 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 		{"time_zone", "TimeZone"},
 		{"title", "Title"},
 		{"phone", "Phone"},
+		// Enterprise fields
+		{"enterprise_id", "EnterpriseID"},
+		{"enterprise_name", "EnterpriseName"},
+		{"team_id", "TeamID"},
+		{"is_org_member", "IsOrgMember"},
 	}
 
 	for _, field := range possibleFields {
@@ -282,6 +410,15 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 				row = append(row, user.Profile.Title)
 			case "phone":
 				row = append(row, user.Profile.Phone)
+			case "enterprise_id":
+				row = append(row, user.Enterprise.EnterpriseID)
+			case "enterprise_name":
+				row = append(row, user.Enterprise.EnterpriseName)
+			case "team_id":
+				row = append(row, user.TeamID)
+			case "is_org_member":
+				isOrgMember, _, _ := classifyUser(user, currentEnterpriseID)
+				row = append(row, fmt.Sprintf("%t", isOrgMember))
 			}
 		}
 		if err := writer.Write(row); err != nil {
@@ -296,18 +433,42 @@ func (uh *UsersHandler) UsersHandler(ctx context.Context, request mcp.CallToolRe
 		return nil, err
 	}
 
-	// Build result with metadata at the beginning
-	var result string
-	result += fmt.Sprintf("# Total users: %d\n", len(filteredUsers))
-	result += fmt.Sprintf("# Returned in this page: %d\n", len(paginatedUsers))
-	if nextCursor != "" {
-		result += fmt.Sprintf("# Next cursor: %s\n", nextCursor)
-	} else {
-		result += "# Next cursor: (none - last page)\n"
-	}
-	result += buf.String()
+	// Build result with transparency headers
+	var result strings.Builder
 
-	return mcp.NewToolResultText(result), nil
+	// Show organization context if enterprise
+	if stats.EnterpriseName != "" {
+		result.WriteString(fmt.Sprintf("# Organization: %s\n", stats.EnterpriseName))
+	}
+
+	// Show breakdown of all users in cache
+	result.WriteString(fmt.Sprintf("# Total in cache: %d\n", stats.TotalInCache))
+	result.WriteString(fmt.Sprintf("#   Org Members: %d active, %d deactivated\n", stats.OrgMemberActive, stats.OrgMemberDeactivated))
+	result.WriteString(fmt.Sprintf("#   External (Slack Connect): %d active, %d deactivated\n", stats.ExternalActive, stats.ExternalDeactivated))
+	result.WriteString(fmt.Sprintf("#   Bots: %d\n", stats.Bots))
+	result.WriteString("#\n")
+
+	// Show what's being returned after filtering
+	result.WriteString(fmt.Sprintf("# Showing: %d users (this page: %d)\n", len(filteredUsers), len(paginatedUsers)))
+
+	// Show hints about hidden users
+	if !includeDeleted && (stats.OrgMemberDeactivated > 0 || stats.ExternalDeactivated > 0) {
+		hidden := stats.OrgMemberDeactivated + stats.ExternalDeactivated
+		result.WriteString(fmt.Sprintf("# Hidden: %d deactivated (use include_deleted=true to see)\n", hidden))
+	}
+	if !includeBots && stats.Bots > 0 {
+		result.WriteString(fmt.Sprintf("# Hidden: %d bots (include_bots defaults to true)\n", stats.Bots))
+	}
+
+	if nextCursor != "" {
+		result.WriteString(fmt.Sprintf("# Next cursor: %s\n", nextCursor))
+	} else {
+		result.WriteString("# Next cursor: (none - last page)\n")
+	}
+
+	result.WriteString(buf.String())
+
+	return mcp.NewToolResultText(result.String()), nil
 }
 
 func paginateUsers(users []slack.User, cursor string, limit int) ([]slack.User, string) {
@@ -372,6 +533,125 @@ func paginateUsers(users []slack.User, cursor string, limit int) ([]slack.User, 
 	)
 
 	return paged, nextCursor
+}
+
+// GetOrgOverviewHandler returns a structured summary of the organization
+func (uh *UsersHandler) GetOrgOverviewHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	uh.logger.Debug("GetOrgOverviewHandler called")
+
+	if ready, err := uh.apiProvider.IsReady(); !ready {
+		uh.logger.Error("API provider not ready", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("API provider not ready", err), nil
+	}
+
+	// Get current enterprise ID for org member/external classification
+	currentEnterpriseID, _ := uh.getEnterpriseContext()
+
+	// Get group_by parameter
+	groupBy := request.GetString("group_by", "")
+
+	// Get users from cache
+	usersCache := uh.apiProvider.ProvideUsersMap()
+	allUsers := usersCache.Users
+
+	// Count users by type and collect titles for grouping
+	var enterpriseName string
+	orgMemberActive := 0
+	orgMemberDeactivated := 0
+	externalActive := 0
+	externalDeactivated := 0
+	bots := 0
+
+	// Maps for title grouping (only for org member active users)
+	titleCounts := make(map[string]int)
+
+	for _, user := range allUsers {
+		isOrgMember, isExternal, isBot := classifyUser(user, currentEnterpriseID)
+
+		if isBot {
+			bots++
+			continue
+		}
+
+		if isOrgMember {
+			if user.Deleted {
+				orgMemberDeactivated++
+			} else {
+				orgMemberActive++
+				// Count titles for active org members
+				title := user.Profile.Title
+				if title == "" {
+					title = "(no title)"
+				}
+				titleCounts[title]++
+			}
+			// Capture enterprise name
+			if enterpriseName == "" && user.Enterprise.EnterpriseName != "" {
+				enterpriseName = user.Enterprise.EnterpriseName
+			}
+		} else if isExternal {
+			if user.Deleted {
+				externalDeactivated++
+			} else {
+				externalActive++
+			}
+		}
+	}
+
+	// Build result
+	var result strings.Builder
+
+	// Header with enterprise info
+	if enterpriseName != "" {
+		result.WriteString(fmt.Sprintf("# Organization: %s (%s)\n\n", enterpriseName, currentEnterpriseID))
+	} else {
+		result.WriteString("# Organization Overview\n\n")
+	}
+
+	// User breakdown
+	result.WriteString("## User Breakdown\n\n")
+	result.WriteString(fmt.Sprintf("Org Member Active:       %d\n", orgMemberActive))
+	result.WriteString(fmt.Sprintf("Org Member Deactivated:  %d\n", orgMemberDeactivated))
+	result.WriteString(fmt.Sprintf("External (Connect):      %d\n", externalActive+externalDeactivated))
+	result.WriteString(fmt.Sprintf("Bots:                    %d\n", bots))
+	result.WriteString("---\n")
+	result.WriteString(fmt.Sprintf("Total:                   %d\n\n", len(allUsers)))
+
+	// Title grouping (if requested or by default)
+	if groupBy == "title" || groupBy == "" {
+		result.WriteString("## By Title (Org Members Only)\n\n")
+
+		// Sort titles by count (descending)
+		type titleCount struct {
+			title string
+			count int
+		}
+		var sortedTitles []titleCount
+		for title, count := range titleCounts {
+			sortedTitles = append(sortedTitles, titleCount{title, count})
+		}
+		sort.Slice(sortedTitles, func(i, j int) bool {
+			return sortedTitles[i].count > sortedTitles[j].count
+		})
+
+		// Output as CSV format using csv.Writer for proper escaping
+		var csvBuf bytes.Buffer
+		csvWriter := csv.NewWriter(&csvBuf)
+		csvWriter.Write([]string{"Title", "Count"})
+		for _, tc := range sortedTitles {
+			csvWriter.Write([]string{tc.title, strconv.Itoa(tc.count)})
+		}
+		csvWriter.Flush()
+		result.WriteString(csvBuf.String())
+	}
+
+	uh.logger.Debug("GetOrgOverviewHandler completed",
+		zap.Int("org_member_active", orgMemberActive),
+		zap.Int("org_member_deactivated", orgMemberDeactivated),
+		zap.Int("external", externalActive+externalDeactivated),
+		zap.Int("bots", bots))
+
+	return mcp.NewToolResultText(result.String()), nil
 }
 
 // GetUserInfoHandler returns detailed information about a single user

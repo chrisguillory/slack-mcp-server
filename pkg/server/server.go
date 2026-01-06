@@ -319,17 +319,21 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 	), channelsHandler.ListChannelMembersHandler)
 
 	s.AddTool(mcp.NewTool("list_users",
-		mcp.WithDescription("List users in the workspace (Slack API: users.list)"),
+		mcp.WithDescription("List users in the workspace (Slack API: users.list). Returns transparency headers showing org member vs external user counts."),
 		mcp.WithString("query",
 			mcp.Description("Search for users by name. Searches in username, real name, and display name (case-insensitive)"),
 		),
+		mcp.WithString("user_type",
+			mcp.DefaultString("all"),
+			mcp.Description("Filter by enterprise user type: 'all' (everything), 'org_member' (your org's employees), 'external' (Slack Connect users from other orgs), 'deleted' (deactivated org members / former employees). Default: 'all'"),
+		),
 		mcp.WithString("filter",
 			mcp.DefaultString("all"),
-			mcp.Description("Filter users by status: 'all', 'active', 'deleted', 'bots', 'humans', 'admins'. Default: 'all'"),
+			mcp.Description("Filter users by status: 'all', 'active', 'deleted', 'bots', 'humans', 'admins'. Default: 'all'. Note: This filter applies AFTER user_type filtering. Use filter=deleted with user_type=all to see all deleted users; use user_type=deleted to see only deactivated org members."),
 		),
 		mcp.WithString("fields",
 			mcp.DefaultString("id,name,real_name,status"),
-			mcp.Description("Comma-separated list of fields to return. Options: 'id', 'name', 'real_name', 'email', 'status', 'is_bot', 'is_admin', 'time_zone', 'title', 'phone'. Use 'all' for all fields. Default: 'id,name,real_name,status'"),
+			mcp.Description("Comma-separated list of fields to return. Options: 'id', 'name', 'real_name', 'email', 'status', 'is_bot', 'is_admin', 'time_zone', 'title', 'phone', 'enterprise_id', 'enterprise_name', 'team_id', 'is_org_member'. Use 'all' for all fields. Default: 'id,name,real_name,status'"),
 		),
 		mcp.WithBoolean("include_deleted",
 			mcp.DefaultBool(false),
@@ -359,6 +363,14 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 			mcp.Description("Comma-separated list of fields to return. Options include: id, team_id, name, real_name, display_name, email, phone, title, status_text, status_emoji, tz, is_admin, is_bot, is_restricted, image_192, presence, and many more. Use 'extended' for common fields, 'all' for all available fields. Default: basic set of commonly used fields"),
 		),
 	), usersHandler.GetUserInfoHandler)
+
+	s.AddTool(mcp.NewTool("get_org_overview",
+		mcp.WithDescription("Get a summary of the organization's user composition. Shows native vs external user counts, breakdown by title, and helps answer questions like 'how many employees do we have?' or 'what engineering roles exist?'"),
+		mcp.WithString("group_by",
+			mcp.DefaultString("title"),
+			mcp.Description("How to group the summary. Options: 'title' (default, groups native active users by job title). More groupings may be added later."),
+		),
+	), usersHandler.GetOrgOverviewHandler)
 
 	s.AddTool(mcp.NewTool("create_channel",
 		mcp.WithDescription("Create a new public or private channel (Slack API: conversations.create)"),
