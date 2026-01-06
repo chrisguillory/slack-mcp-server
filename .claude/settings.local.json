@@ -17,7 +17,22 @@
       "mcp__slack__get_channel_messages",
       "mcp__slack__download_file",
       "Bash(docker logs:*)",
-      "Bash(docker ps:*)"
+      "Bash(docker ps:*)",
+      "mcp__slack__search_messages",
+      "Bash(cat:*)",
+      "mcp__slack__get_current_user",
+      "mcp__slack__get_slack_templates",
+      "Bash(ls:*)",
+      "mcp__granola__list_meetings",
+      "mcp__granola__download_note",
+      "mcp__slack__list_users",
+      "mcp__slack__get_user_info",
+      "WebFetch(domain:api.slack.com)",
+      "WebFetch(domain:docs.slack.dev)",
+      "mcp__selenium-browser-automation__get_aria_snapshot",
+      "mcp__selenium-browser-automation__get_page_text",
+      "mcp__slack__get_org_overview",
+      "Bash(gh pr view:*)"
     ],
     "deny": [],
     "ask": []
