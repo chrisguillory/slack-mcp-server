@@ -109,6 +109,12 @@ func (fh *FileHandler) DownloadFileHandler(ctx context.Context, request mcp.Call
 	// Get optional output_dir parameter
 	outputDir := request.GetString("output_dir", fh.downloadDir)
 
+	// In Docker mode, reject output_dir if it's a path — the caller's filesystem
+	// is the host, not the container, so custom paths won't be accessible.
+	if fh.hostDownloadDir != "" && outputDir != fh.downloadDir {
+		return mcp.NewToolResultError("output_dir is not supported in Docker mode. Files are saved to the volume-mounted download directory and the host path is returned in local_path."), nil
+	}
+
 	// Make path absolute if it's relative
 	if !filepath.IsAbs(outputDir) {
 		absPath, err := filepath.Abs(outputDir)

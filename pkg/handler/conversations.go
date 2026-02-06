@@ -262,35 +262,31 @@ func (ch *ConversationsHandler) convertMessagesFromHistoryWithFields(slackMessag
 			userName, realName, ok = getUserInfo(msg.User, ch.apiProvider.ProvideUsersMap().Users)
 
 			if !ok && msg.SubType == "bot_message" {
-				// Bot messages should have BotID, not Username
+				// Bot messages may have Username (display name) and/or BotID
 				if msg.Username != "" {
-					// Unexpected: bot message has Username set
-					ch.logger.Error("UNEXPECTED: Bot message has Username",
-						zap.String("username", msg.Username),
-						zap.String("bot_id", msg.BotID),
-						zap.String("timestamp", msg.Timestamp))
-					panic(fmt.Sprintf("Bot message has unexpected Username: %s (BotID: %s)", msg.Username, msg.BotID))
-				}
-				if msg.BotID == "" {
-					// This should never happen for bot messages
-					ch.logger.Error("CRITICAL: Bot message missing BotID",
-						zap.String("timestamp", msg.Timestamp))
-					panic("Bot message missing BotID")
-				}
-
-				// Resolve bot to user
-				botUser, found := getBotInfo(msg.BotID, ch.apiProvider)
-				if found {
-					userID = botUser.ID
-					userName = botUser.Name
-					realName = botUser.RealName
-					ok = true
-				} else {
-					// Fallback: use bot ID for all fields for traceability
+					// Use Username as the display name for the bot
 					userID = msg.BotID
-					userName = msg.BotID
-					realName = msg.BotID
+					if userID == "" {
+						userID = msg.Username
+					}
+					userName = msg.Username
+					realName = msg.Username
 					ok = true
+				} else if msg.BotID != "" {
+					// Resolve bot to user via BotID
+					botUser, found := getBotInfo(msg.BotID, ch.apiProvider)
+					if found {
+						userID = botUser.ID
+						userName = botUser.Name
+						realName = botUser.RealName
+						ok = true
+					} else {
+						// Fallback: use bot ID for all fields for traceability
+						userID = msg.BotID
+						userName = msg.BotID
+						realName = msg.BotID
+						ok = true
+					}
 				}
 			}
 
