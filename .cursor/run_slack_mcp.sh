@@ -62,6 +62,8 @@ fi
 echo "Ensuring Go dependencies are up to date..."
 go mod tidy
 
-# Run the local Go MCP server with the loaded environment variables
-echo "Starting Slack MCP server with local Go build..."
-exec go run cmd/slack-mcp-server/main.go mcp-server --transport stdio
+# Build and run the MCP server
+echo "Building Slack MCP server..." >&2
+go build -o ./build/slack-mcp-server ./cmd/slack-mcp-server
+echo "Starting Slack MCP server..." >&2
+exec ./build/slack-mcp-server mcp-server --transport stdio

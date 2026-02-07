@@ -43,13 +43,13 @@ func NewUsersHandler(apiProvider *provider.ApiProvider, logger *zap.Logger) *Use
 
 // UserStats holds counts for transparency headers
 type UserStats struct {
-	TotalInCache          int
-	OrgMemberActive       int
-	OrgMemberDeactivated  int
-	ExternalActive        int
-	ExternalDeactivated   int
-	Bots                  int
-	EnterpriseName        string
+	TotalInCache         int
+	OrgMemberActive      int
+	OrgMemberDeactivated int
+	ExternalActive       int
+	ExternalDeactivated  int
+	Bots                 int
+	EnterpriseName       string
 }
 
 // getEnterpriseContext fetches the current enterprise ID and name for classification.

@@ -430,6 +430,43 @@ func NewMCPServer(provider *provider.ApiProvider, logger *zap.Logger) *MCPServer
 		),
 	), fileHandler.DownloadFileHandler)
 
+	s.AddTool(mcp.NewTool("get_file_info",
+		mcp.WithDescription("Get file metadata including sharing status, permalink, and visibility (Slack API: files.info). Use to check if a file is public/private, which channels it's shared in, and get its permalink. File IDs come from the 'files' or 'filesFull' fields in message responses."),
+		mcp.WithString("file_id",
+			mcp.Required(),
+			mcp.Description("Slack file ID (e.g., F09RFRJ8QSV). Obtained from the 'files' or 'filesFull' fields in message responses."),
+		),
+	), fileHandler.GetFileInfoHandler)
+
+	s.AddTool(mcp.NewTool("upload_file",
+		mcp.WithDescription("Upload a local file to a Slack channel (Slack API: files.uploadV2). The file must exist on the local filesystem (e.g., previously downloaded via download_file). The uploaded file is scoped to the target channel - it is private by default, visible only to channel members. Use the download_file + upload_file flow to copy a file from one conversation to another without changing the original file's permissions. Maximum file size: 50MB."),
+		mcp.WithString("file_path",
+			mcp.Required(),
+			mcp.Description("Local filesystem path to the file to upload. Use the local_path value returned by download_file."),
+		),
+		mcp.WithString("channel_id",
+			mcp.Required(),
+			mcp.Description("Channel ID (C...), DM ID (D...), or name (#channel-name) to upload the file to."),
+		),
+		mcp.WithString("title",
+			mcp.Description("Title for the uploaded file. Defaults to the filename if not provided."),
+		),
+		mcp.WithString("initial_comment",
+			mcp.Description("Message text to accompany the file upload."),
+		),
+		mcp.WithString("thread_ts",
+			mcp.Description("Thread timestamp to upload the file as a thread reply. Format: 1234567890.123456"),
+		),
+	), fileHandler.UploadFileHandler)
+
+	s.AddTool(mcp.NewTool("make_file_public",
+		mcp.WithDescription("Make a Slack file publicly accessible (Slack API: files.sharedPublicURL). Activates the file's public URL so it can be used in Block Kit image blocks or shared externally. WARNING: Anyone with the URL can view the file. Returns the public permalink."),
+		mcp.WithString("file_id",
+			mcp.Required(),
+			mcp.Description("Slack file ID to make public (e.g., F09RFRJ8QSV)."),
+		),
+	), fileHandler.MakeFilePublicHandler)
+
 	s.AddTool(mcp.NewTool("get_slack_templates",
 		mcp.WithDescription("Get curated Block Kit templates for professional Slack messages. Returns the SLACK_TEMPLATES.md file with examples for status updates, alerts, meeting summaries, announcements, requests, reports, errors, and empty states. Use these templates as a starting point when composing well-formatted messages."),
 	), chatHandler.GetSlackTemplatesHandler)

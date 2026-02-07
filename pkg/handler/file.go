@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gocarina/gocsv"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/slack-go/slack"
 	"go.uber.org/zap"
 )
 
@@ -261,6 +263,17 @@ func (fh *FileHandler) translatePath(containerPath string) string {
 
 // sanitizeFilename removes or replaces characters that are problematic in filenames
 func sanitizeFilename(name string) string {
+	// Replace non-ASCII characters (e.g., Unicode non-breaking spaces in Slack filenames)
+	var asciiName strings.Builder
+	for _, r := range name {
+		if r > 127 {
+			asciiName.WriteRune('_')
+		} else {
+			asciiName.WriteRune(r)
+		}
+	}
+	name = asciiName.String()
+
 	// Replace path separators and other problematic characters
 	replacer := strings.NewReplacer(
 		"/", "_",
@@ -322,4 +335,253 @@ func (fh *FileHandler) Cleanup() {
 		fh.logger.Info("Temp directory cleaned up successfully",
 			zap.String("path", fh.downloadDir))
 	}
+}
+
+// --- get_file_info ---
+
+type FileInfoResult struct {
+	ID              string `csv:"id"`
+	Name            string `csv:"name"`
+	Title           string `csv:"title"`
+	Filetype        string `csv:"filetype"`
+	Mimetype        string `csv:"mimetype"`
+	Size            int    `csv:"size"`
+	User            string `csv:"user"`
+	Created         string `csv:"created"`
+	IsPublic        string `csv:"is_public"`
+	PublicURLShared string `csv:"public_url_shared"`
+	Permalink       string `csv:"permalink"`
+	PermalinkPublic string `csv:"permalink_public"`
+	URLPrivate      string `csv:"url_private"`
+	Channels        string `csv:"channels"`
+	Groups          string `csv:"groups"`
+	IMs             string `csv:"ims"`
+	Shares          string `csv:"shares"`
+	CommentsCount   int    `csv:"comments_count"`
+	IsExternal      string `csv:"is_external"`
+}
+
+func (fh *FileHandler) GetFileInfoHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fh.logger.Debug("GetFileInfoHandler called", zap.Any("params", request.Params))
+
+	fileID := request.GetString("file_id", "")
+	if fileID == "" {
+		return mcp.NewToolResultError("file_id parameter is required"), nil
+	}
+
+	fileInfo, _, _, err := fh.apiProvider.Slack().GetFileInfoContext(ctx, fileID, 0, 0)
+	if err != nil {
+		fh.logger.Error("Failed to get file info from Slack",
+			zap.String("file_id", fileID), zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to get file info", err), nil
+	}
+
+	result := []FileInfoResult{{
+		ID:              fileInfo.ID,
+		Name:            fileInfo.Name,
+		Title:           fileInfo.Title,
+		Filetype:        fileInfo.Filetype,
+		Mimetype:        fileInfo.Mimetype,
+		Size:            fileInfo.Size,
+		User:            fileInfo.User,
+		Created:         time.Unix(int64(fileInfo.Created), 0).Format(time.RFC3339),
+		IsPublic:        fmt.Sprintf("%t", fileInfo.IsPublic),
+		PublicURLShared: fmt.Sprintf("%t", fileInfo.PublicURLShared),
+		Permalink:       fileInfo.Permalink,
+		PermalinkPublic: fileInfo.PermalinkPublic,
+		URLPrivate:      fileInfo.URLPrivate,
+		Channels:        strings.Join(fileInfo.Channels, ","),
+		Groups:          strings.Join(fileInfo.Groups, ","),
+		IMs:             strings.Join(fileInfo.IMs, ","),
+		Shares:          flattenShares(fileInfo.Shares),
+		CommentsCount:   fileInfo.CommentsCount,
+		IsExternal:      fmt.Sprintf("%t", fileInfo.IsExternal),
+	}}
+
+	csvBytes, err := gocsv.MarshalBytes(&result)
+	if err != nil {
+		fh.logger.Error("Failed to marshal file info to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format file info", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
+}
+
+// flattenShares converts the nested Share struct into "type:channel_id:ts|..." format
+func flattenShares(shares slack.Share) string {
+	var parts []string
+	for channelID, infos := range shares.Public {
+		for _, info := range infos {
+			parts = append(parts, fmt.Sprintf("public:%s:%s", channelID, info.Ts))
+		}
+	}
+	for channelID, infos := range shares.Private {
+		for _, info := range infos {
+			parts = append(parts, fmt.Sprintf("private:%s:%s", channelID, info.Ts))
+		}
+	}
+	return strings.Join(parts, "|")
+}
+
+// --- upload_file ---
+
+type FileUploadResult struct {
+	FileID  string `csv:"file_id"`
+	Title   string `csv:"title"`
+	Channel string `csv:"channel"`
+	Status  string `csv:"status"`
+}
+
+func (fh *FileHandler) UploadFileHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fh.logger.Debug("UploadFileHandler called", zap.Any("params", request.Params))
+
+	filePath := request.GetString("file_path", "")
+	if filePath == "" {
+		return mcp.NewToolResultError("file_path parameter is required"), nil
+	}
+
+	channelID := request.GetString("channel_id", "")
+	if channelID == "" {
+		return mcp.NewToolResultError("channel_id parameter is required"), nil
+	}
+
+	// Resolve channel names (#channel or @user) to IDs
+	if strings.HasPrefix(channelID, "#") || strings.HasPrefix(channelID, "@") {
+		channelsMaps := fh.apiProvider.ProvideChannelsMaps()
+		chn, ok := channelsMaps.ChannelsInv[channelID]
+		if !ok {
+			fh.logger.Error("Channel not found", zap.String("channel", channelID))
+			return mcp.NewToolResultError(fmt.Sprintf("channel %q not found", channelID)), nil
+		}
+		channelID = channelsMaps.Channels[chn].ID
+	}
+
+	title := request.GetString("title", "")
+	initialComment := request.GetString("initial_comment", "")
+	threadTs := request.GetString("thread_ts", "")
+
+	// Docker mode: if the given path doesn't exist locally, try translating
+	// host path back to container path (reverse of download's translatePath)
+	actualFilePath := filePath
+	if _, err := os.Stat(actualFilePath); err != nil && fh.hostDownloadDir != "" && strings.HasPrefix(filePath, fh.hostDownloadDir) {
+		relativePath := strings.TrimPrefix(filePath, fh.hostDownloadDir)
+		relativePath = strings.TrimPrefix(relativePath, string(filepath.Separator))
+		translated := filepath.Join(fh.baseDownloadDir, relativePath)
+		fh.logger.Debug("File not found at given path, trying container path",
+			zap.String("host", filePath),
+			zap.String("container", translated))
+		actualFilePath = translated
+	}
+
+	fileHandle, err := os.Open(actualFilePath)
+	if err != nil {
+		fh.logger.Error("Failed to open file", zap.String("path", actualFilePath), zap.Error(err))
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to open file: %v", err)), nil
+	}
+	defer fileHandle.Close()
+
+	fileStat, err := fileHandle.Stat()
+	if err != nil {
+		fh.logger.Error("Failed to stat file", zap.String("path", actualFilePath), zap.Error(err))
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to read file info: %v", err)), nil
+	}
+
+	if fileStat.IsDir() {
+		return mcp.NewToolResultError("file_path must point to a file, not a directory"), nil
+	}
+
+	if fileStat.Size() > int64(maxFileSize) {
+		return mcp.NewToolResultError(fmt.Sprintf("file size %d bytes exceeds limit of %d bytes", fileStat.Size(), maxFileSize)), nil
+	}
+
+	if fileStat.Size() == 0 {
+		return mcp.NewToolResultError("file is empty (0 bytes)"), nil
+	}
+
+	filename := filepath.Base(actualFilePath)
+	if title == "" {
+		title = filename
+	}
+
+	fh.logger.Debug("Uploading file to Slack",
+		zap.String("file", actualFilePath),
+		zap.String("channel", channelID),
+		zap.String("title", title),
+		zap.Int64("size", fileStat.Size()))
+
+	params := slack.UploadFileV2Parameters{
+		Reader:          fileHandle,
+		Filename:        filename,
+		FileSize:        int(fileStat.Size()),
+		Title:           title,
+		InitialComment:  initialComment,
+		Channel:         channelID,
+		ThreadTimestamp: threadTs,
+	}
+
+	fileSummary, err := fh.apiProvider.Slack().UploadFileV2Context(ctx, params)
+	if err != nil {
+		fh.logger.Error("Failed to upload file to Slack", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to upload file", err), nil
+	}
+
+	fh.logger.Info("File uploaded successfully",
+		zap.String("file_id", fileSummary.ID),
+		zap.String("title", fileSummary.Title),
+		zap.String("channel", channelID))
+
+	result := []FileUploadResult{{
+		FileID:  fileSummary.ID,
+		Title:   fileSummary.Title,
+		Channel: channelID,
+		Status:  "uploaded",
+	}}
+
+	csvBytes, err := gocsv.MarshalBytes(&result)
+	if err != nil {
+		fh.logger.Error("Failed to marshal upload result to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format upload result", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
+}
+
+// --- make_file_public ---
+
+type FilePublicResult struct {
+	FileID          string `csv:"file_id"`
+	PermalinkPublic string `csv:"permalink_public"`
+}
+
+func (fh *FileHandler) MakeFilePublicHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	fh.logger.Debug("MakeFilePublicHandler called", zap.Any("params", request.Params))
+
+	fileID := request.GetString("file_id", "")
+	if fileID == "" {
+		return mcp.NewToolResultError("file_id parameter is required"), nil
+	}
+
+	fileInfo, _, _, err := fh.apiProvider.Slack().ShareFilePublicURLContext(ctx, fileID)
+	if err != nil {
+		fh.logger.Error("Failed to make file public",
+			zap.String("file_id", fileID), zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to make file public", err), nil
+	}
+
+	fh.logger.Info("File made public",
+		zap.String("file_id", fileInfo.ID),
+		zap.String("permalink_public", fileInfo.PermalinkPublic))
+
+	result := []FilePublicResult{{
+		FileID:          fileInfo.ID,
+		PermalinkPublic: fileInfo.PermalinkPublic,
+	}}
+
+	csvBytes, err := gocsv.MarshalBytes(&result)
+	if err != nil {
+		fh.logger.Error("Failed to marshal result to CSV", zap.Error(err))
+		return mcp.NewToolResultErrorFromErr("Failed to format result", err), nil
+	}
+
+	return mcp.NewToolResultText(string(csvBytes)), nil
 }

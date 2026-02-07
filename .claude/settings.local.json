@@ -16,8 +16,6 @@
       "mcp__slack__get_thread_messages",
       "mcp__slack__get_channel_messages",
       "mcp__slack__download_file",
-      "Bash(docker logs:*)",
-      "Bash(docker ps:*)",
       "mcp__slack__search_messages",
       "Bash(cat:*)",
       "mcp__slack__get_current_user",
@@ -32,7 +30,11 @@
       "mcp__selenium-browser-automation__get_aria_snapshot",
       "mcp__selenium-browser-automation__get_page_text",
       "mcp__slack__get_org_overview",
-      "Bash(gh pr view:*)"
+      "Bash(gh pr view:*)",
+      "WebFetch(domain:slack.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:dev.to)",
+      "mcp__slack__upload_file"
     ],
     "deny": [],
     "ask": []

@@ -108,6 +108,13 @@ type SlackAPI interface {
 	GetFileInfoContext(ctx context.Context, fileID string, count, page int) (*slack.File, []slack.Comment, *slack.Paging, error)
 	GetFileContext(ctx context.Context, downloadURL string, writer io.Writer) error
 
+	// File upload (V2 uses a 3-step process: get pre-signed URL, upload bytes to storage, finalize.
+	// slack-go wraps all 3 steps. V1 files.upload is deprecated since March 2025.)
+	UploadFileV2Context(ctx context.Context, params slack.UploadFileV2Parameters) (*slack.FileSummary, error)
+
+	// Make a file's public URL active (files.sharedPublicURL)
+	ShareFilePublicURLContext(ctx context.Context, fileID string) (*slack.File, []slack.Comment, *slack.Paging, error)
+
 	// Useed to get channels list from both Slack and Enterprise Grid versions
 	GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
 
@@ -386,6 +393,14 @@ func (c *MCPSlackClient) GetFileInfoContext(ctx context.Context, fileID string, 
 
 func (c *MCPSlackClient) GetFileContext(ctx context.Context, downloadURL string, writer io.Writer) error {
 	return c.slackClient.GetFileContext(ctx, downloadURL, writer)
+}
+
+func (c *MCPSlackClient) UploadFileV2Context(ctx context.Context, params slack.UploadFileV2Parameters) (*slack.FileSummary, error) {
+	return c.slackClient.UploadFileV2Context(ctx, params)
+}
+
+func (c *MCPSlackClient) ShareFilePublicURLContext(ctx context.Context, fileID string) (*slack.File, []slack.Comment, *slack.Paging, error) {
+	return c.slackClient.ShareFilePublicURLContext(ctx, fileID)
 }
 
 func (c *MCPSlackClient) PostMessageContext(ctx context.Context, channelID string, options ...slack.MsgOption) (string, string, error) {
