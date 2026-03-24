@@ -58,10 +58,6 @@ if [ ! -f "go.mod" ]; then
     exit 1
 fi
 
-# Ensure dependencies are up to date
-echo "Ensuring Go dependencies are up to date..."
-go mod tidy
-
 # Build and run the MCP server
 echo "Building Slack MCP server..." >&2
 go build -o ./build/slack-mcp-server ./cmd/slack-mcp-server

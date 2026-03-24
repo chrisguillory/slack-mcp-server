@@ -6,6 +6,7 @@ require (
 	github.com/gocarina/gocsv v0.0.0-20240520201108-78e41c74b4b1
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.44.0
+	github.com/mattn/go-isatty v0.0.20
 	github.com/openai/openai-go v1.12.0
 	github.com/refraction-networking/utls v1.8.2
 	github.com/rusq/slack v0.9.6-0.20250408103104-dd80d1b6337f
@@ -14,6 +15,7 @@ require (
 	github.com/rusq/tagops v0.1.1
 	github.com/slack-go/slack v0.17.3
 	github.com/stretchr/testify v1.11.1
+	github.com/takara2314/slack-go-util v0.3.0
 	go.uber.org/zap v1.27.1
 	golang.ngrok.com/ngrok/v2 v2.1.1
 	golang.org/x/net v0.50.0
@@ -60,7 +62,6 @@ require (
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mitchellh/hashstructure/v2 v2.0.2 // indirect
@@ -74,7 +75,6 @@ require (
 	github.com/rusq/chttp v1.1.0 // indirect
 	github.com/rusq/fsadapter v1.1.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
-	github.com/takara2314/slack-go-util v0.3.0 // indirect
 	github.com/tidwall/gjson v1.17.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
