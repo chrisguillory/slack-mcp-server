@@ -1,7 +1,7 @@
 # Slack MCP Server
 [![Trust Score](https://archestra.ai/mcp-catalog/api/badge/quality/korotovsky/slack-mcp-server)](https://archestra.ai/mcp-catalog/korotovsky__slack-mcp-server)
 
-Model Context Protocol (MCP) server for Slack Workspaces. The most powerful MCP Slack server — supports Stdio and SSE transports, proxy settings, DMs, Group DMs, Smart History fetch (by date or count), may work via OAuth or in complete stealth mode with no permissions and scopes in Workspace 😏.
+Model Context Protocol (MCP) server for Slack Workspaces. The most powerful MCP Slack server — supports Stdio, SSE and HTTP transports, proxy settings, DMs, Group DMs, Smart History fetch (by date or count), may work via OAuth or in complete stealth mode with no permissions and scopes in Workspace 😏.
 
 > [!NOTE]
 > **Stealth Mode Technical Details**: *Browser session tokens* (**xoxc**/**xoxd**) are compatible with the **standard Slack API** in addition to the Edge API. The **xoxc token** functions as a bearer token for API authentication, while the **xoxd token** is sent as a cookie. This combination *enables full access* to Slack's standard API endpoints **without installing a Slack app or granting extra permissions**.
@@ -16,12 +16,13 @@ This feature-rich Slack MCP Server has:
 - **Enterprise Workspaces Support**: Possibility to integrate with Enterprise Slack setups.
 - **Channel and Thread Support with `#Name` `@Lookup`**: Fetch messages from channels and threads, including activity messages, and retrieve channels using their names (e.g., #general) as well as their IDs.
 - **Smart History**: Fetch messages with pagination by date (d1, 7d, 1m) or message count.
+- **Unread Messages**: Get all unread messages across channels efficiently with priority sorting (DMs > partner channels > internal), @mention filtering, and mark-as-read support.
 - **Search Messages**: Search messages in channels, threads, and DMs using various filters like date, user, and content.
 - **Safe Message Posting**: The `post_message` tool is disabled by default for safety. Enable it via an environment variable, with optional channel restrictions.
 - **DM and Group DM support**: Retrieve direct messages and group direct messages.
 - **Embedded user information**: Embed user information in messages, for better context.
 - **Cache support**: Cache users and channels for faster access.
-- **Stdio/SSE Transports & Proxy Support**: Use the server with any MCP client that supports Stdio or SSE transports, and configure it to route outgoing requests through a proxy if needed.
+- **Stdio/SSE/HTTP Transports & Proxy Support**: Use the server with any MCP client that supports Stdio, SSE or HTTP transports, and configure it to route outgoing requests through a proxy if needed.
 
 ### Analytics Demo
 
@@ -95,6 +96,8 @@ Delete a message that was posted by the bot
 
 ### 6. search_messages
 Search for messages across channels and DMs
+
+> **Note**: This tool is not available when using bot tokens (`xoxb-*`). Bot tokens cannot use the `search.messages` API.
 - **Parameters:**
   - `search_query` (string, optional): Search query to filter messages. Example: 'marketing report' or full URL of Slack message e.g. 'https://slack.com/archives/C1234567890/p1234567890123456', then the tool will return a single message matching given URL, herewith all other parameters will be ignored.
   - `filter_in_channel` (string, optional): Filter messages in a specific channel by its ID or name. Example: `C1234567890` or `#general`. If not provided, all channels will be searched.
@@ -292,6 +295,128 @@ Archive a channel to preserve its history while removing it from active use
   - Some channels (like #general) cannot be archived
   - Archiving preserves all messages and files
 
+### 6. reactions_add:
+Add an emoji reaction to a message in a public channel, private channel, or direct message (DM, or IM) conversation.
+
+> **Note:** Adding reactions is disabled by default for safety. To enable, set the `SLACK_MCP_ADD_MESSAGE_TOOL` environment variable. If set to a comma-separated list of channel IDs, reactions are enabled only for those specific channels. See the Environment Variables section below for details.
+
+- **Parameters:**
+  - `channel_id` (string, required): ID of the channel in format `Cxxxxxxxxxx` or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
+  - `timestamp` (string, required): Timestamp of the message to add reaction to, in format `1234567890.123456`.
+  - `emoji` (string, required): The name of the emoji to add as a reaction (without colons). Example: `thumbsup`, `heart`, `rocket`.
+
+### 7. reactions_remove:
+Remove an emoji reaction from a message in a public channel, private channel, or direct message (DM, or IM) conversation.
+
+> **Note:** Removing reactions follows the same permission model as `reactions_add`. To enable, set the `SLACK_MCP_ADD_MESSAGE_TOOL` environment variable.
+
+- **Parameters:**
+  - `channel_id` (string, required): ID of the channel in format `Cxxxxxxxxxx` or its name starting with `#...` or `@...` aka `#general` or `@username_dm`.
+  - `timestamp` (string, required): Timestamp of the message to remove reaction from, in format `1234567890.123456`.
+  - `emoji` (string, required): The name of the emoji to remove as a reaction (without colons). Example: `thumbsup`, `heart`, `rocket`.
+
+### 8. users_search:
+Search for users by name, email, or display name. Returns user details and DM channel ID if available.
+
+> **Note:** For OAuth tokens (`xoxp`/`xoxb`), this tool searches the local users cache using pattern matching. For browser session tokens (`xoxc`/`xoxd`), it uses the Slack edge API for real-time search.
+
+- **Parameters:**
+  - `query` (string, required): Search query - matches against real name, display name, username, or email.
+  - `limit` (number, default: 10): Maximum number of results to return (1-100).
+
+- **Returns:** CSV with fields:
+  - `UserID`: User ID (e.g., `U1234567890`)
+  - `UserName`: Slack username
+  - `RealName`: User's real name
+  - `DisplayName`: User's display name
+  - `Email`: User's email address
+  - `Title`: User's job title
+  - `DMChannelID`: DM channel ID if available in cache (for quick messaging)
+
+### 9. usergroups_list:
+List all user groups (subteams) in the workspace.
+
+- **Parameters:**
+  - `include_users` (boolean, default: false): Include list of user IDs in each group.
+  - `include_count` (boolean, default: true): Include user count for each group.
+  - `include_disabled` (boolean, default: false): Include disabled/archived groups.
+
+- **Returns:** CSV with fields: id, name, handle, description, user_count, is_external
+
+> **Required OAuth scopes:** `usergroups:read`
+
+### 10. usergroups_create:
+Create a new user group in the workspace.
+
+- **Parameters:**
+  - `name` (string, required): Name of the user group (e.g., "Engineering Team").
+  - `handle` (string, optional): Mention handle without @ (e.g., "engineering"). If not provided, Slack will auto-generate one.
+  - `description` (string, optional): Purpose or description of the group.
+  - `channels` (string, optional): Comma-separated channel IDs for default channels where group mentions will be highlighted.
+
+- **Returns:** JSON with created group details (id, name, handle, description)
+
+> **Required OAuth scopes:** `usergroups:write`
+
+### 11. usergroups_update:
+Update an existing user group's metadata.
+
+- **Parameters:**
+  - `usergroup_id` (string, required): ID of the user group (e.g., "S1234567890").
+  - `name` (string, optional): New name for the group.
+  - `handle` (string, optional): New mention handle.
+  - `description` (string, optional): New description.
+  - `channels` (string, optional): New default channels (comma-separated IDs). This replaces existing default channels.
+
+- **Returns:** JSON with updated group details
+
+> **Required OAuth scopes:** `usergroups:write`
+
+### 12. usergroups_users_update:
+Update the members of a user group. This replaces all existing members.
+
+- **Parameters:**
+  - `usergroup_id` (string, required): ID of the user group (e.g., "S1234567890").
+  - `users` (string, required): Comma-separated user IDs to set as members (e.g., "U123,U456,U789").
+
+- **Returns:** JSON with updated group details including new user list
+
+> **Required OAuth scopes:** `usergroups:write`
+
+### 13. usergroups_me:
+Manage your user group membership: list groups you're in, join a group, or leave a group.
+
+- **Parameters:**
+  - `action` (string, required): Action to perform - `list` to see your groups, `join` to add yourself, `leave` to remove yourself.
+  - `usergroup_id` (string, optional): ID of the user group (e.g., "S1234567890"). Required for `join` and `leave` actions.
+
+- **Returns:**
+  - For `list`: CSV with groups you're a member of
+  - For `join`/`leave`: JSON with result message and updated group info
+
+> **Required OAuth scopes:** `usergroups:read` (for list), `usergroups:read` + `usergroups:write` (for join/leave)
+
+### 14. conversations_unreads
+Get unread messages across all channels efficiently. Uses a single API call to identify channels with unreads, then fetches only those messages. Results are prioritized: DMs > partner channels (Slack Connect) > internal channels.
+
+> **Note:** This tool works best with browser session tokens (`xoxc`/`xoxd`), which use the efficient `client.counts` API. For standard OAuth tokens (`xoxp`), a fallback method using `conversations.info` is used, which requires one API call per channel and may be slower for large workspaces. Not available with bot tokens (`xoxb`).
+
+- **Parameters:**
+  - `include_messages` (boolean, default: true): If true, returns the actual unread messages. If false, returns only a summary of channels with unreads.
+  - `channel_types` (string, default: "all"): Filter by channel type: `all`, `dm` (direct messages), `group_dm` (group DMs), `partner` (externally shared channels), `internal` (regular workspace channels).
+  - `max_channels` (number, default: 50): Maximum number of channels to fetch unreads from.
+  - `max_messages_per_channel` (number, default: 10): Maximum messages to fetch per channel.
+  - `mentions_only` (boolean, default: false): If true, only returns channels where you have @mentions. Note: This filter only works with browser tokens; OAuth tokens will return all unread channels.
+
+### 15. conversations_mark
+Mark a channel or DM as read.
+
+> **Note:** Marking messages as read is disabled by default for safety. To enable, set the `SLACK_MCP_MARK_TOOL` environment variable to `true` or `1`. See the Environment Variables section below for details.
+
+- **Parameters:**
+  - `channel_id` (string, required): ID of the channel in format `Cxxxxxxxxxx` or its name starting with `#...` or `@...` (e.g., `#general`, `@username`).
+  - `ts` (string, optional): Timestamp of the message to mark as read up to. If not provided, marks all messages as read.
+
 ## Resources
 
 The Slack MCP Server exposes two special directory resources for easy access to workspace metadata:
@@ -315,9 +440,10 @@ See the project documentation for detailed installation and configuration instru
 | `SLACK_MCP_XOXC_TOKEN`            | Yes*      | `nil`                     | Slack browser token (`xoxc-...`)                                                                                                                                                                                                                                                          |
 | `SLACK_MCP_XOXD_TOKEN`            | Yes*      | `nil`                     | Slack browser cookie `d` (`xoxd-...`)                                                                                                                                                                                                                                                     |
 | `SLACK_MCP_XOXP_TOKEN`            | Yes*      | `nil`                     | User OAuth token (`xoxp-...`) — alternative to xoxc/xoxd                                                                                                                                                                                                                                  |
+| `SLACK_MCP_XOXB_TOKEN`            | Yes*      | `nil`                     | Bot token (`xoxb-...`) — alternative to xoxp/xoxc/xoxd. Bot has limited access (invited channels only, no search)                                                                                                                                                                         |
 | `SLACK_MCP_PORT`                  | No        | `13080`                   | Port for the MCP server to listen on                                                                                                                                                                                                                                                      |
 | `SLACK_MCP_HOST`                  | No        | `127.0.0.1`               | Host for the MCP server to listen on                                                                                                                                                                                                                                                      |
-| `SLACK_MCP_SSE_API_KEY`           | No        | `nil`                     | Bearer token for SSE transport                                                                                                                                                                                                                                                            |
+| `SLACK_MCP_API_KEY`               | No        | `nil`                     | Bearer token for SSE and HTTP transports                                                                                                                                                                                                                                                            |
 | `SLACK_MCP_PROXY`                 | No        | `nil`                     | Proxy URL for outgoing requests                                                                                                                                                                                                                                                           |
 | `SLACK_MCP_USER_AGENT`            | No        | `nil`                     | Custom User-Agent (for Enterprise Slack environments)                                                                                                                                                                                                                                     |
 | `SLACK_MCP_CUSTOM_TLS`            | No        | `nil`                     | Send custom TLS-handshake to Slack servers based on `SLACK_MCP_USER_AGENT` or default User-Agent. (for Enterprise Slack environments)                                                                                                                                                     |
@@ -333,12 +459,15 @@ See the project documentation for detailed installation and configuration instru
 | `SLACK_MCP_BOT_DELETE_MESSAGE_TOOL` | No      | `nil`                     | Enable bot message deletion via `delete_message_as_bot`. Falls back to `SLACK_MCP_DELETE_MESSAGE_TOOL` if not set. Same format: true, comma-separated channel IDs, or `!` prefix for exclusions. |
 | `SLACK_MCP_ADD_MESSAGE_MARK`      | No        | `nil`                     | When the `post_message` tool is enabled, any new message sent will automatically be marked as read.                                                                                                                                                                          |
 | `SLACK_MCP_ADD_MESSAGE_UNFURLING` | No        | `nil`                     | Enable to let Slack unfurl posted links or set comma-separated list of domains e.g. `github.com,slack.com` to whitelist unfurling only for them. If text contains whitelisted and unknown domain unfurling will be disabled for security reasons.                                         |
+| `SLACK_MCP_MARK_TOOL`             | No        | `nil`                     | Enable the `conversations_mark` tool by setting to `true` or `1`. Disabled by default to prevent accidental marking of messages as read.                                                                                                                                                  |
 | `SLACK_MCP_USERS_CACHE`           | No        | `.users_cache.json`       | Path to the users cache file. Used to cache Slack user information to avoid repeated API calls on startup.                                                                                                                                                                                |
 | `SLACK_MCP_CHANNELS_CACHE`        | No        | `.channels_cache_v2.json` | Path to the channels cache file. Used to cache Slack channel information to avoid repeated API calls on startup.                                                                                                                                                                          |
 | `SLACK_MCP_EMOJIS_CACHE`          | No        | `.emojis_cache.json`      | Path to the emojis cache file. Used to cache Slack emoji information to avoid repeated API calls on startup.                                                                                                                                                                              |
 | `SLACK_MCP_LOG_LEVEL`             | No        | `info`                    | Log-level for stdout or stderr. Valid values are: `debug`, `info`, `warn`, `error`, `panic` and `fatal`                                                                                                                                                                                   |
+| `SLACK_MCP_GOVSLACK`              | No        | `nil`                     | Set to `true` to enable [GovSlack](https://slack.com/solutions/govslack) mode. Routes API calls to `slack-gov.com` endpoints instead of `slack.com` for FedRAMP-compliant government workspaces.                                                                                          |
+| `SLACK_MCP_ENABLED_TOOLS`         | No        | `nil`                     | Comma-separated list of tools to register. If empty, all read-only tools and usergroups tools are registered; write tools (`conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`) require their specific env var OR must be explicitly listed here. When a write tool is listed here, it's enabled without channel restrictions. Available tools: `conversations_history`, `conversations_replies`, `conversations_add_message`, `reactions_add`, `reactions_remove`, `attachment_get_data`, `conversations_search_messages`, `channels_list`, `usergroups_list`, `usergroups_me`, `usergroups_create`, `usergroups_update`, `usergroups_users_update`. |
 
-*You need either `xoxp` **or** both `xoxc`/`xoxd` tokens for authentication.
+*You need one of: `xoxp` (user), `xoxb` (bot), or both `xoxc`/`xoxd` tokens for authentication.
 
 ### Limitations matrix & Cache
 

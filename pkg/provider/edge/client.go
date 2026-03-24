@@ -55,6 +55,9 @@ func (cl *Client) ClientCounts(ctx context.Context) (ClientCountsResponse, error
 	if err := cl.ParseResponse(&r, resp); err != nil {
 		return ClientCountsResponse{}, err
 	}
+	if err := r.validate("client.counts"); err != nil {
+		return ClientCountsResponse{}, err
+	}
 	return r, nil
 }
 
@@ -101,6 +104,12 @@ type IM struct {
 }
 
 func (c IM) SlackChannel() slack.Channel {
+	// Add Members array with just the User for IM channels
+	var members []string
+	if c.User != "" {
+		members = []string{c.User}
+	}
+
 	return slack.Channel{
 		GroupConversation: slack.GroupConversation{
 			Conversation: slack.Conversation{
@@ -112,6 +121,7 @@ func (c IM) SlackChannel() slack.Channel {
 				LastRead:    c.LastRead.SlackString(),
 			},
 			IsArchived: c.IsArchived,
+			Members:    members,
 		},
 	}
 

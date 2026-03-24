@@ -9,7 +9,12 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/limiter"
 	"github.com/korotovsky/slack-mcp-server/pkg/provider/edge"
@@ -24,6 +29,8 @@ const usersNotReadyMsg = "users cache is not ready yet, sync process is still ru
 const channelsNotReadyMsg = "channels cache is not ready yet, sync process is still running... please wait"
 const emojisNotReadyMsg = "emojis cache is not ready yet, sync process is still running... please wait"
 const defaultUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+const defaultCacheTTL = 1 * time.Hour
+const defaultMinRefreshInterval = 30 * time.Second
 
 var AllChanTypes = []string{"mpim", "im", "public_channel", "private_channel"}
 var PrivateChanType = "private_channel"
@@ -32,6 +39,122 @@ var PubChanType = "public_channel"
 var ErrUsersNotReady = errors.New(usersNotReadyMsg)
 var ErrChannelsNotReady = errors.New(channelsNotReadyMsg)
 var ErrEmojisNotReady = errors.New(emojisNotReadyMsg)
+var ErrRefreshRateLimited = errors.New("refresh skipped due to rate limiting")
+
+// getCacheDir returns the appropriate cache directory for slack-mcp-server
+func getCacheDir() string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		// Fallback to current directory if we can't get user cache dir
+		return "."
+	}
+
+	dir := filepath.Join(cacheDir, "slack-mcp-server")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		// Fallback to current directory if we can't create cache dir
+		return "."
+	}
+	return dir
+}
+
+// getCacheTTL returns the cache TTL from SLACK_MCP_CACHE_TTL env var or default (1 hour).
+// Supports formats: "1h", "30m", "3600" (seconds), "0" (disable TTL, cache forever)
+// Negative values are rejected and fall back to default.
+func getCacheTTL() time.Duration {
+	ttlStr := os.Getenv("SLACK_MCP_CACHE_TTL")
+	if ttlStr == "" {
+		return defaultCacheTTL
+	}
+
+	// Try parsing as duration first (e.g., "1h", "30m")
+	if d, err := time.ParseDuration(ttlStr); err == nil {
+		if d < 0 {
+			return defaultCacheTTL // Reject negative TTL
+		}
+		return d
+	}
+
+	// Try parsing as seconds (e.g., "3600")
+	if secs, err := strconv.ParseInt(ttlStr, 10, 64); err == nil {
+		if secs < 0 {
+			return defaultCacheTTL // Reject negative TTL
+		}
+		return time.Duration(secs) * time.Second
+	}
+
+	return defaultCacheTTL
+}
+
+// getMinRefreshInterval returns the minimum interval between forced refreshes from
+// SLACK_MCP_MIN_REFRESH_INTERVAL env var or default (30s).
+// Supports formats: "30s", "1m", "60" (seconds), "0" (disable rate limiting)
+// Negative values are rejected and fall back to default.
+func getMinRefreshInterval() time.Duration {
+	intervalStr := os.Getenv("SLACK_MCP_MIN_REFRESH_INTERVAL")
+	if intervalStr == "" {
+		return defaultMinRefreshInterval
+	}
+
+	// Try parsing as duration first (e.g., "30s", "1m")
+	if d, err := time.ParseDuration(intervalStr); err == nil {
+		if d < 0 {
+			return defaultMinRefreshInterval // Reject negative interval
+		}
+		return d
+	}
+
+	// Try parsing as seconds (e.g., "60")
+	if secs, err := strconv.ParseInt(intervalStr, 10, 64); err == nil {
+		if secs < 0 {
+			return defaultMinRefreshInterval // Reject negative interval
+		}
+		return time.Duration(secs) * time.Second
+	}
+
+	return defaultMinRefreshInterval
+}
+
+// validateAuthAndGetTeamID performs auth validation on startup and returns the TeamID.
+// This ensures tokens are valid before proceeding and enables cache namespacing
+// to prevent cache contamination when using multiple Slack workspaces.
+// Returns an error if authentication fails - the server should not start with invalid credentials.
+func validateAuthAndGetTeamID(authProvider auth.Provider, logger *zap.Logger) (string, error) {
+	xoxpToken := os.Getenv("SLACK_MCP_XOXP_TOKEN")
+	xoxcToken := os.Getenv("SLACK_MCP_XOXC_TOKEN")
+	xoxdToken := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+	if xoxpToken == "demo" || (xoxcToken == "demo" && xoxdToken == "demo") {
+		return "demo", nil
+	}
+
+	httpClient := transport.ProvideHTTPClient(authProvider.Cookies(), logger)
+	slackOpts := []slack.Option{slack.OptionHTTPClient(httpClient)}
+	if os.Getenv("SLACK_MCP_GOVSLACK") == "true" {
+		slackOpts = append(slackOpts, slack.OptionAPIURL("https://slack-gov.com/api/"))
+	}
+	slackClient := slack.New(authProvider.SlackToken(), slackOpts...)
+
+	authResp, err := slackClient.AuthTest()
+	if err != nil {
+		return "", err
+	}
+
+	logger.Info("Authenticated to Slack",
+		zap.String("team", authResp.Team),
+		zap.String("team_id", authResp.TeamID),
+		zap.String("user", authResp.User))
+
+	return authResp.TeamID, nil
+}
+
+// getCachePathWithTeamID returns a cache file path prefixed with TeamID for workspace isolation.
+// If TeamID is empty, returns the default filename without prefix.
+func getCachePathWithTeamID(teamID, filename string) string {
+	cacheDir := getCacheDir()
+	if teamID != "" {
+		return filepath.Join(cacheDir, teamID+"_"+filename)
+	}
+	return filepath.Join(cacheDir, filename)
+}
 
 type UsersCache struct {
 	Users    map[string]slack.User `json:"users"`
@@ -88,6 +211,7 @@ type Channel struct {
 	SharedTeamIDs      []string `json:"shared_team_ids,omitempty"`
 	LastRead           string   `json:"last_read,omitempty"`
 	Latest             string   `json:"latest,omitempty"`
+	User               string   `json:"user,omitempty"` // User ID for IM channels
 }
 
 type SlackAPI interface {
@@ -98,8 +222,10 @@ type SlackAPI interface {
 	GetUsersInfo(users ...string) (*[]slack.User, error)
 	PostMessageContext(ctx context.Context, channel string, options ...slack.MsgOption) (string, string, error)
 	MarkConversationContext(ctx context.Context, channel, ts string) error
+	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
 
-	// Useed to get messages
+	// Used to get messages
 	GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 	GetConversationRepliesContext(ctx context.Context, params *slack.GetConversationRepliesParameters) (msgs []slack.Message, hasMore bool, nextCursor string, err error)
 	SearchContext(ctx context.Context, query string, params slack.SearchParameters) (*slack.SearchMessages, *slack.SearchFiles, error)
@@ -115,15 +241,22 @@ type SlackAPI interface {
 	// Make a file's public URL active (files.sharedPublicURL)
 	ShareFilePublicURLContext(ctx context.Context, fileID string) (*slack.File, []slack.Comment, *slack.Paging, error)
 
-	// Useed to get channels list from both Slack and Enterprise Grid versions
+	// Used to get channel info (for unread counts with xoxp tokens)
+	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
+
+	// Used to get channels list from both Slack and Enterprise Grid versions
 	GetConversationsContext(ctx context.Context, params *slack.GetConversationsParameters) ([]slack.Channel, string, error)
+
+	// Used to list only channels the calling user is a member of (users.conversations).
+	// For xoxp tokens this is more efficient than conversations.list because it excludes
+	// non-member public channels and closed DMs that cannot have unreads.
+	GetConversationsForUserContext(ctx context.Context, params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error)
 
 	// Edge API methods
 	ClientUserBoot(ctx context.Context) (*edge.ClientUserBootResponse, error)
-
-	// Reactions
-	AddReactionContext(ctx context.Context, name string, item slack.ItemRef) error
-	RemoveReactionContext(ctx context.Context, name string, item slack.ItemRef) error
+	UsersSearch(ctx context.Context, query string, count int) ([]slack.User, error)
+	ClientCounts(ctx context.Context) (edge.ClientCountsResponse, error)
+	GetMutedChannels(ctx context.Context) (map[string]bool, error)
 
 	// Message management
 	DeleteMessageContext(ctx context.Context, channel, messageTimestamp string) (string, string, error)
@@ -131,7 +264,6 @@ type SlackAPI interface {
 
 	// Channel members
 	GetUsersInConversationContext(ctx context.Context, params *slack.GetUsersInConversationParameters) ([]string, string, error)
-	GetConversationInfoContext(ctx context.Context, input *slack.GetConversationInfoInput) (*slack.Channel, error)
 
 	// User information
 	GetUserInfoContext(ctx context.Context, user string) (*slack.User, error)
@@ -145,6 +277,13 @@ type SlackAPI interface {
 	ArchiveConversationContext(ctx context.Context, channelID string) error
 	SetTopicOfConversationContext(ctx context.Context, channelID, topic string) (*slack.Channel, error)
 	SetPurposeOfConversationContext(ctx context.Context, channelID, purpose string) (*slack.Channel, error)
+
+	// User groups API methods
+	GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
+	GetUserGroupMembersContext(ctx context.Context, userGroup string, options ...slack.GetUserGroupMembersOption) ([]string, error)
+	CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup, options ...slack.CreateUserGroupOption) (slack.UserGroup, error)
+	UpdateUserGroupContext(ctx context.Context, userGroupID string, options ...slack.UpdateUserGroupsOption) (slack.UserGroup, error)
+	UpdateUserGroupMembersContext(ctx context.Context, userGroup string, members string, options ...slack.UpdateUserGroupMembersOption) (slack.UserGroup, error)
 }
 
 type MCPSlackClient struct {
@@ -157,6 +296,8 @@ type MCPSlackClient struct {
 
 	isEnterprise   bool
 	isOAuth        bool
+	isBotToken     bool
+	edgeFailed     bool     // set when edge API fails; subsequent calls skip straight to standard API
 	teamEndpoint   string
 	workspaceTeams []string // Team IDs (e.g. T08U80K08H4) for workspaces the user belongs to (from enterprise_user.teams)
 }
@@ -166,17 +307,23 @@ type ApiProvider struct {
 	client    SlackAPI
 	logger    *zap.Logger
 
-	rateLimiter *rate.Limiter
+	rateLimiter        *rate.Limiter
+	cacheTTL           time.Duration
+	minRefreshInterval time.Duration
 
-	users      map[string]slack.User
-	usersInv   map[string]string
-	usersCache string
-	usersReady bool
+	// Users cache: atomic pointer to immutable snapshot (no copy on read)
+	usersSnapshot          atomic.Pointer[UsersCache]
+	usersCachePath         string
+	usersReady             bool
+	lastForcedUsersRefresh time.Time
+	usersMu                sync.RWMutex // protects usersReady, lastForcedUsersRefresh
 
-	channels      map[string]Channel
-	channelsInv   map[string]string
-	channelsCache string
-	channelsReady bool
+	// Channels cache: atomic pointer to immutable snapshot (no copy on read)
+	channelsSnapshot          atomic.Pointer[ChannelsCache]
+	channelsCachePath         string
+	channelsReady             bool
+	lastForcedChannelsRefresh time.Time
+	channelsMu                sync.RWMutex // protects channelsReady, lastForcedChannelsRefresh
 
 	emojis      map[string]Emoji
 	emojisCache string
@@ -190,9 +337,11 @@ type ApiProvider struct {
 func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlackClient, error) {
 	httpClient := transport.ProvideHTTPClient(authProvider.Cookies(), logger)
 
-	slackClient := slack.New(authProvider.SlackToken(),
-		slack.OptionHTTPClient(httpClient),
-	)
+	slackOpts := []slack.Option{slack.OptionHTTPClient(httpClient)}
+	if os.Getenv("SLACK_MCP_GOVSLACK") == "true" {
+		slackOpts = append(slackOpts, slack.OptionAPIURL("https://slack-gov.com/api/"))
+	}
+	slackClient := slack.New(authProvider.SlackToken(), slackOpts...)
 
 	authResp, err := slackClient.AuthTest()
 	if err != nil {
@@ -222,6 +371,13 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 	}
 
 	isEnterprise := authResp.EnterpriseID != ""
+	token := authProvider.SlackToken()
+
+	// Token type detection
+	// isOAuth: Official OAuth tokens (xoxp or xoxb) - uses Standard API
+	// isBotToken: Bot token - determines feature availability (e.g., search)
+	isOAuth := strings.HasPrefix(token, "xoxp-") || strings.HasPrefix(token, "xoxb-")
+	isBotToken := strings.HasPrefix(token, "xoxb-")
 
 	// If Enterprise Grid, fetch user's workspace Team IDs from enterprise_user.teams
 	var workspaceTeams []string
@@ -267,7 +423,8 @@ func NewMCPSlackClient(authProvider auth.Provider, logger *zap.Logger) (*MCPSlac
 		authResponse:   authResponse,
 		authProvider:   authProvider,
 		isEnterprise:   isEnterprise,
-		isOAuth:        strings.HasPrefix(authProvider.SlackToken(), "xoxp-"),
+		isOAuth:        isOAuth,
+		isBotToken:     isBotToken,
 		teamEndpoint:   authResp.URL,
 		workspaceTeams: workspaceTeams,
 	}, nil
@@ -317,20 +474,32 @@ func (c *MCPSlackClient) GetConversationsContext(ctx context.Context, params *sl
 	if c.isEnterprise {
 		if c.isOAuth {
 			return c.slackClient.GetConversationsContext(ctx, params)
-		} else {
-			edgeChannels, _, err := c.edgeClient.GetConversationsContext(ctx, nil)
-			if err != nil {
-				return nil, "", err
+		}
+
+		// Enterprise + non-OAuth: try edge API first (for DMs, MPIMs, etc.),
+		// then supplement with standard API. The edge API may only return
+		// partial results (e.g., DMs succeed but SearchChannels fails on
+		// restricted teams), so we always merge both sources.
+		//
+		// The edge API returns all results in one shot (no pagination),
+		// while the standard API paginates. We fully paginate the standard
+		// API here and return a merged, deduplicated result set with an
+		// empty cursor so the caller doesn't need to re-paginate.
+		if !c.edgeFailed {
+			edgeChannels, _, edgeErr := c.edgeClient.GetConversationsContext(ctx, nil)
+			if edgeErr != nil {
+				c.edgeFailed = true
+				return c.slackClient.GetConversationsContext(ctx, params)
 			}
 
+			// Collect edge results into a map for deduplication.
+			seen := make(map[string]struct{}, len(edgeChannels))
 			var channels []slack.Channel
 			for _, ec := range edgeChannels {
 				if params != nil && params.ExcludeArchived && ec.IsArchived {
 					continue
 				}
-
-				// Convert from rusq/slack.Channel to slack-go/slack.Channel
-				// The edge client already populated the fields from boot data
+				seen[ec.ID] = struct{}{}
 				channels = append(channels, slack.Channel{
 					IsGeneral: ec.IsGeneral,
 					IsMember:  ec.IsMember,
@@ -368,11 +537,45 @@ func (c *MCPSlackClient) GetConversationsContext(ctx context.Context, params *sl
 				})
 			}
 
+			// Supplement with ALL pages from the standard API to fill gaps
+			// the edge API missed (e.g., public/private channels on
+			// restricted teams where SearchChannels returns an error).
+			stdParams := &slack.GetConversationsParameters{
+				Limit:           999,
+				ExcludeArchived: true,
+			}
+			if params != nil {
+				stdParams.Types = params.Types
+			}
+			for {
+				stdChannels, nextCur, stdErr := c.slackClient.GetConversationsContext(ctx, stdParams)
+				if stdErr != nil {
+					break // standard API failed; keep what edge gave us
+				}
+				for _, sc := range stdChannels {
+					if _, ok := seen[sc.ID]; !ok {
+						seen[sc.ID] = struct{}{}
+						channels = append(channels, sc)
+					}
+				}
+				if nextCur == "" {
+					break
+				}
+				stdParams.Cursor = nextCur
+			}
+
 			return channels, "", nil
 		}
+
+		// Edge API previously failed -- use standard API directly.
+		return c.slackClient.GetConversationsContext(ctx, params)
 	}
 
 	return c.slackClient.GetConversationsContext(ctx, params)
+}
+
+func (c *MCPSlackClient) GetConversationsForUserContext(ctx context.Context, params *slack.GetConversationsForUserParameters) ([]slack.Channel, string, error) {
+	return c.slackClient.GetConversationsForUserContext(ctx, params)
 }
 
 func (c *MCPSlackClient) GetConversationHistoryContext(ctx context.Context, params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
@@ -545,6 +748,38 @@ func (c *MCPSlackClient) ClientUserBoot(ctx context.Context) (*edge.ClientUserBo
 	return c.edgeClient.ClientUserBoot(ctx)
 }
 
+func (c *MCPSlackClient) UsersSearch(ctx context.Context, query string, count int) ([]slack.User, error) {
+	return c.edgeClient.UsersSearch(ctx, query, count)
+}
+
+func (c *MCPSlackClient) ClientCounts(ctx context.Context) (edge.ClientCountsResponse, error) {
+	return c.edgeClient.ClientCounts(ctx)
+}
+
+func (c *MCPSlackClient) GetMutedChannels(ctx context.Context) (map[string]bool, error) {
+	return c.edgeClient.GetMutedChannels(ctx)
+}
+
+func (c *MCPSlackClient) GetUserGroupsContext(ctx context.Context, options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error) {
+	return c.slackClient.GetUserGroupsContext(ctx, options...)
+}
+
+func (c *MCPSlackClient) GetUserGroupMembersContext(ctx context.Context, userGroup string, options ...slack.GetUserGroupMembersOption) ([]string, error) {
+	return c.slackClient.GetUserGroupMembersContext(ctx, userGroup, options...)
+}
+
+func (c *MCPSlackClient) CreateUserGroupContext(ctx context.Context, userGroup slack.UserGroup, options ...slack.CreateUserGroupOption) (slack.UserGroup, error) {
+	return c.slackClient.CreateUserGroupContext(ctx, userGroup, options...)
+}
+
+func (c *MCPSlackClient) UpdateUserGroupContext(ctx context.Context, userGroupID string, options ...slack.UpdateUserGroupsOption) (slack.UserGroup, error) {
+	return c.slackClient.UpdateUserGroupContext(ctx, userGroupID, options...)
+}
+
+func (c *MCPSlackClient) UpdateUserGroupMembersContext(ctx context.Context, userGroup string, members string, options ...slack.UpdateUserGroupMembersOption) (slack.UserGroup, error) {
+	return c.slackClient.UpdateUserGroupMembersContext(ctx, userGroup, members, options...)
+}
+
 func (c *MCPSlackClient) IsEnterprise() bool {
 	return c.isEnterprise
 }
@@ -555,6 +790,14 @@ func (c *MCPSlackClient) AuthResponse() *slack.AuthTestResponse {
 
 func (c *MCPSlackClient) GetWorkspaceTeams() []string {
 	return c.workspaceTeams
+}
+
+func (c *MCPSlackClient) IsBotToken() bool {
+	return c.isBotToken
+}
+
+func (c *MCPSlackClient) IsOAuth() bool {
+	return c.isOAuth
 }
 
 func (c *MCPSlackClient) Raw() struct {
@@ -594,8 +837,23 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 		err          error
 	)
 
-	// Check for XOXP token first (User OAuth)
+	// Read all environment variables
 	xoxpToken := os.Getenv("SLACK_MCP_XOXP_TOKEN")
+	xoxbToken := os.Getenv("SLACK_MCP_XOXB_TOKEN")
+	xoxcToken := os.Getenv("SLACK_MCP_XOXC_TOKEN")
+	xoxdToken := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+
+	// Warn if both user and bot tokens are set
+	if xoxpToken != "" && xoxbToken != "" {
+		logger.Warn(
+			"Both SLACK_MCP_XOXP_TOKEN and SLACK_MCP_XOXB_TOKEN are set. "+
+				"Using User token (xoxp) for full features. "+
+				"Bot token will be ignored.",
+			zap.String("context", "console"),
+		)
+	}
+
+	// Priority 1: XOXP token (User OAuth)
 	if xoxpToken != "" {
 		authProvider, err = auth.NewValueAuth(xoxpToken, "")
 		if err != nil {
@@ -605,12 +863,24 @@ func New(transport string, logger *zap.Logger) *ApiProvider {
 		return newWithXOXP(transport, authProvider, logger)
 	}
 
-	// Fall back to XOXC/XOXD tokens (session-based)
-	xoxcToken := os.Getenv("SLACK_MCP_XOXC_TOKEN")
-	xoxdToken := os.Getenv("SLACK_MCP_XOXD_TOKEN")
+	// Priority 2: XOXB token (Bot)
+	if xoxbToken != "" {
+		authProvider, err = auth.NewValueAuth(xoxbToken, "")
+		if err != nil {
+			logger.Fatal("Failed to create auth provider with XOXB token", zap.Error(err))
+		}
 
+		logger.Info("Using Bot token authentication",
+			zap.String("context", "console"),
+			zap.String("token_type", "xoxb"),
+		)
+
+		return newWithXOXB(transport, authProvider, logger)
+	}
+
+	// Priority 3: XOXC/XOXD tokens (session-based)
 	if xoxcToken == "" || xoxdToken == "" {
-		logger.Fatal("Authentication required: Either SLACK_MCP_XOXP_TOKEN (User OAuth) or both SLACK_MCP_XOXC_TOKEN and SLACK_MCP_XOXD_TOKEN (session-based) environment variables must be provided")
+		logger.Fatal("Authentication required: Either SLACK_MCP_XOXP_TOKEN, SLACK_MCP_XOXB_TOKEN, or both SLACK_MCP_XOXC_TOKEN and SLACK_MCP_XOXD_TOKEN must be provided")
 	}
 
 	authProvider, err = auth.NewValueAuth(xoxcToken, xoxdToken)
@@ -627,33 +897,24 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
-	// Use cache directory - defaults to ./cache, can be overridden with env var
-	cacheDir := os.Getenv("SLACK_MCP_CACHE_DIR")
-	if cacheDir == "" {
-		cacheDir = "./cache"
-	}
-
-	// Ensure cache directory exists
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		logger.Warn("Failed to create cache directory, using current directory",
-			zap.String("cache_dir", cacheDir),
-			zap.Error(err))
-		cacheDir = "." // Fall back to current directory
+	teamID, err := validateAuthAndGetTeamID(authProvider, logger)
+	if err != nil {
+		logger.Fatal("Authentication failed - check your Slack tokens", zap.Error(err))
 	}
 
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
-		usersCache = filepath.Join(cacheDir, "users_cache.json")
+		usersCache = getCachePathWithTeamID(teamID, "users_cache.json")
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
-		channelsCache = filepath.Join(cacheDir, "channels_cache.json")
+		channelsCache = getCachePathWithTeamID(teamID, "channels_cache_v2.json")
 	}
 
 	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
 	if emojisCache == "" {
-		emojisCache = filepath.Join(cacheDir, "emojis_cache.json")
+		emojisCache = getCachePathWithTeamID(teamID, "emojis_cache.json")
 	}
 
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
@@ -665,20 +926,17 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		}
 	}
 
-	return &ApiProvider{
+	ap := &ApiProvider{
 		transport: transport,
 		client:    client,
 		logger:    logger,
 
-		rateLimiter: limiter.Tier2.Limiter(),
+		rateLimiter:        limiter.Tier2.Limiter(),
+		cacheTTL:           getCacheTTL(),
+		minRefreshInterval: getMinRefreshInterval(),
 
-		users:      make(map[string]slack.User),
-		usersInv:   map[string]string{},
-		usersCache: usersCache,
-
-		channels:      make(map[string]Channel),
-		channelsInv:   map[string]string{},
-		channelsCache: channelsCache,
+		usersCachePath:    usersCache,
+		channelsCachePath: channelsCache,
 
 		emojis:      make(map[string]Emoji),
 		emojisCache: emojisCache,
@@ -686,6 +944,22 @@ func newWithXOXP(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		botIDToUser: make(map[string]slack.User),
 		appIDToUser: make(map[string]slack.User),
 	}
+	// Initialize with empty snapshots
+	ap.usersSnapshot.Store(&UsersCache{
+		Users:    make(map[string]slack.User),
+		UsersInv: make(map[string]string),
+	})
+	ap.channelsSnapshot.Store(&ChannelsCache{
+		Channels:    make(map[string]Channel),
+		ChannelsInv: make(map[string]string),
+	})
+	return ap
+}
+
+func newWithXOXB(transport string, authProvider auth.ValueAuth, logger *zap.Logger) *ApiProvider {
+	// Bot tokens do not support demo mode, but otherwise share the same
+	// initialization logic as user OAuth tokens.
+	return newWithXOXP(transport, authProvider, logger)
 }
 
 func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logger) *ApiProvider {
@@ -694,33 +968,24 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		err    error
 	)
 
-	// Use cache directory - defaults to ./cache, can be overridden with env var
-	cacheDir := os.Getenv("SLACK_MCP_CACHE_DIR")
-	if cacheDir == "" {
-		cacheDir = "./cache"
-	}
-
-	// Ensure cache directory exists
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		logger.Warn("Failed to create cache directory, using current directory",
-			zap.String("cache_dir", cacheDir),
-			zap.Error(err))
-		cacheDir = "." // Fall back to current directory
+	teamID, err := validateAuthAndGetTeamID(authProvider, logger)
+	if err != nil {
+		logger.Fatal("Authentication failed - check your Slack tokens", zap.Error(err))
 	}
 
 	usersCache := os.Getenv("SLACK_MCP_USERS_CACHE")
 	if usersCache == "" {
-		usersCache = filepath.Join(cacheDir, "users_cache.json")
+		usersCache = getCachePathWithTeamID(teamID, "users_cache.json")
 	}
 
 	channelsCache := os.Getenv("SLACK_MCP_CHANNELS_CACHE")
 	if channelsCache == "" {
-		channelsCache = filepath.Join(cacheDir, "channels_cache_v2.json")
+		channelsCache = getCachePathWithTeamID(teamID, "channels_cache_v2.json")
 	}
 
 	emojisCache := os.Getenv("SLACK_MCP_EMOJIS_CACHE")
 	if emojisCache == "" {
-		emojisCache = filepath.Join(cacheDir, "emojis_cache.json")
+		emojisCache = getCachePathWithTeamID(teamID, "emojis_cache.json")
 	}
 
 	if os.Getenv("SLACK_MCP_XOXP_TOKEN") == "demo" || (os.Getenv("SLACK_MCP_XOXC_TOKEN") == "demo" && os.Getenv("SLACK_MCP_XOXD_TOKEN") == "demo") {
@@ -732,20 +997,17 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		}
 	}
 
-	return &ApiProvider{
+	ap := &ApiProvider{
 		transport: transport,
 		client:    client,
 		logger:    logger,
 
-		rateLimiter: limiter.Tier2.Limiter(),
+		rateLimiter:        limiter.Tier2.Limiter(),
+		cacheTTL:           getCacheTTL(),
+		minRefreshInterval: getMinRefreshInterval(),
 
-		users:      make(map[string]slack.User),
-		usersInv:   map[string]string{},
-		usersCache: usersCache,
-
-		channels:      make(map[string]Channel),
-		channelsInv:   map[string]string{},
-		channelsCache: channelsCache,
+		usersCachePath:    usersCache,
+		channelsCachePath: channelsCache,
 
 		emojis:      make(map[string]Emoji),
 		emojisCache: emojisCache,
@@ -753,75 +1015,162 @@ func newWithXOXC(transport string, authProvider auth.ValueAuth, logger *zap.Logg
 		botIDToUser: make(map[string]slack.User),
 		appIDToUser: make(map[string]slack.User),
 	}
+	// Initialize with empty snapshots
+	ap.usersSnapshot.Store(&UsersCache{
+		Users:    make(map[string]slack.User),
+		UsersInv: make(map[string]string),
+	})
+	ap.channelsSnapshot.Store(&ChannelsCache{
+		Channels:    make(map[string]Channel),
+		ChannelsInv: make(map[string]string),
+	})
+	return ap
 }
 
 func (ap *ApiProvider) RefreshUsers(ctx context.Context) error {
+	return ap.refreshUsersInternal(ctx, false)
+}
+
+// ForceRefreshUsers bypasses the cache and fetches fresh user data from Slack API.
+// Rate limited by SLACK_MCP_MIN_REFRESH_INTERVAL (default 30s) to prevent API abuse.
+// Returns ErrRefreshRateLimited if refresh is skipped due to rate limiting.
+func (ap *ApiProvider) ForceRefreshUsers(ctx context.Context) error {
+	if ap.minRefreshInterval > 0 {
+		// Use single lock scope for check-and-update to prevent TOCTOU race
+		ap.usersMu.Lock()
+		sinceLast := time.Since(ap.lastForcedUsersRefresh)
+		if sinceLast < ap.minRefreshInterval {
+			ap.usersMu.Unlock()
+			ap.logger.Debug("Skipping forced users refresh, within rate limit",
+				zap.Duration("since_last", sinceLast),
+				zap.Duration("min_interval", ap.minRefreshInterval))
+			return ErrRefreshRateLimited
+		}
+		// Update timestamp before refresh to prevent concurrent forced refreshes
+		ap.lastForcedUsersRefresh = time.Now()
+		ap.usersMu.Unlock()
+	}
+
+	ap.logger.Info("Force refreshing users cache")
+	return ap.refreshUsersInternal(ctx, true)
+}
+
+func (ap *ApiProvider) refreshUsersInternal(ctx context.Context, force bool) error {
+	ap.usersMu.Lock()
+	defer ap.usersMu.Unlock()
+
 	var (
-		list         []slack.User
-		usersCounter = 0
-		optionLimit  = slack.GetUsersOptionLimit(1000)
+		list        []slack.User
+		optionLimit = slack.GetUsersOptionLimit(1000)
 	)
 
-	if data, err := ioutil.ReadFile(ap.usersCache); err == nil {
-		var cachedUsers []slack.User
-		if err := json.Unmarshal(data, &cachedUsers); err != nil {
-			ap.logger.Warn("Failed to unmarshal users cache, will refetch",
-				zap.String("cache_file", ap.usersCache),
-				zap.Error(err))
-		} else {
-			for _, u := range cachedUsers {
-				ap.users[u.ID] = u
-				ap.usersInv[u.Name] = u.ID
+	// Check if we should use cache (not forced, cache exists, and within TTL)
+	if !force {
+		if data, err := os.ReadFile(ap.usersCachePath); err == nil {
+			var cachedUsers []slack.User
+			if err := json.Unmarshal(data, &cachedUsers); err != nil {
+				ap.logger.Warn("Failed to unmarshal users cache, will refetch",
+					zap.String("cache_file", ap.usersCachePath),
+					zap.Error(err))
+			} else if len(cachedUsers) == 0 {
+				ap.logger.Warn("Users cache is empty or null, will refetch",
+					zap.String("cache_file", ap.usersCachePath))
+			} else {
+				// Check cache TTL using file modification time
+				cacheValid := true
+				if ap.cacheTTL > 0 {
+					if fileInfo, err := os.Stat(ap.usersCachePath); err == nil {
+						cacheAge := time.Since(fileInfo.ModTime())
+						if cacheAge > ap.cacheTTL {
+							ap.logger.Info("Users cache expired, will refetch",
+								zap.Duration("cache_age", cacheAge),
+								zap.Duration("ttl", ap.cacheTTL),
+								zap.String("cache_file", ap.usersCachePath))
+							cacheValid = false
+						}
+					}
+				}
+
+				if cacheValid {
+					// Build new snapshot from cache
+					newSnapshot := &UsersCache{
+						Users:    make(map[string]slack.User, len(cachedUsers)),
+						UsersInv: make(map[string]string, len(cachedUsers)),
+					}
+					for _, u := range cachedUsers {
+						newSnapshot.Users[u.ID] = u
+						newSnapshot.UsersInv[u.Name] = u.ID
+					}
+					ap.usersSnapshot.Store(newSnapshot)
+					ap.logger.Info("Loaded users from cache",
+						zap.Int("count", len(cachedUsers)),
+						zap.String("cache_file", ap.usersCachePath))
+					ap.usersReady = true
+					return nil
+				}
 			}
-			ap.logger.Info("Loaded users from cache",
-				zap.Int("count", len(cachedUsers)),
-				zap.String("cache_file", ap.usersCache))
-			ap.usersReady = true
-			return nil
 		}
 	}
 
+	// Fetch fresh data from Slack API
 	users, err := ap.client.GetUsersContext(ctx,
 		optionLimit,
 	)
 	if err != nil {
 		ap.logger.Error("Failed to fetch users", zap.Error(err))
 		return err
-	} else {
-		list = append(list, users...)
 	}
+	list = append(list, users...)
 
+	// Build new snapshot
+	newSnapshot := &UsersCache{
+		Users:    make(map[string]slack.User),
+		UsersInv: make(map[string]string),
+	}
 	for _, user := range users {
-		ap.users[user.ID] = user
-		ap.usersInv[user.Name] = user.ID
-		usersCounter++
+		newSnapshot.Users[user.ID] = user
+		newSnapshot.UsersInv[user.Name] = user.ID
 	}
+	// Store intermediate snapshot so GetSlackConnect can read current users
+	ap.usersSnapshot.Store(newSnapshot)
 
-	users, err = ap.GetSlackConnect(ctx)
+	connectUsers, err := ap.GetSlackConnect(ctx)
 	if err != nil {
 		ap.logger.Error("Failed to fetch users from Slack Connect", zap.Error(err))
 		return err
-	} else {
-		list = append(list, users...)
 	}
+	list = append(list, connectUsers...)
 
-	for _, user := range users {
-		ap.users[user.ID] = user
-		ap.usersInv[user.Name] = user.ID
-		usersCounter++
+	// Add Slack Connect users to a new snapshot (since maps are shared)
+	if len(connectUsers) > 0 {
+		finalSnapshot := &UsersCache{
+			Users:    make(map[string]slack.User, len(newSnapshot.Users)+len(connectUsers)),
+			UsersInv: make(map[string]string, len(newSnapshot.UsersInv)+len(connectUsers)),
+		}
+		for k, v := range newSnapshot.Users {
+			finalSnapshot.Users[k] = v
+		}
+		for k, v := range newSnapshot.UsersInv {
+			finalSnapshot.UsersInv[k] = v
+		}
+		for _, user := range connectUsers {
+			finalSnapshot.Users[user.ID] = user
+			finalSnapshot.UsersInv[user.Name] = user.ID
+		}
+		ap.usersSnapshot.Store(finalSnapshot)
 	}
 
 	if data, err := json.MarshalIndent(list, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal users for cache", zap.Error(err))
 	} else {
-		if err := ioutil.WriteFile(ap.usersCache, data, 0644); err != nil {
+		if err := os.WriteFile(ap.usersCachePath, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
-				zap.String("cache_file", ap.usersCache),
+				zap.String("cache_file", ap.usersCachePath),
 				zap.Error(err))
 		} else {
 			ap.logger.Info("Wrote users to cache",
-				zap.Int("count", usersCounter),
-				zap.String("cache_file", ap.usersCache))
+				zap.Int("count", len(list)),
+				zap.String("cache_file", ap.usersCachePath))
 		}
 	}
 
@@ -929,25 +1278,25 @@ func (ap *ApiProvider) addCommonUnicodeEmojis() {
 	// Standard Unicode emojis (a subset of common ones)
 	// These are not returned by the API but are always available
 	commonUnicodeEmojis := map[string]string{
-		"thumbsup":         "👍",
-		"thumbsdown":       "👎",
-		"heart":            "❤️",
-		"smile":            "😊",
-		"laughing":         "😂",
-		"cry":              "😢",
-		"angry":            "😠",
-		"clap":             "👏",
-		"fire":             "🔥",
-		"eyes":             "👀",
-		"rocket":           "🚀",
-		"100":              "💯",
-		"pray":             "🙏",
-		"tada":             "🎉",
-		"white_check_mark": "✅",
-		"x":                "❌",
-		"warning":          "⚠️",
-		"question":         "❓",
-		"exclamation":      "❗",
+		"thumbsup":         "\xf0\x9f\x91\x8d",
+		"thumbsdown":       "\xf0\x9f\x91\x8e",
+		"heart":            "\xe2\x9d\xa4\xef\xb8\x8f",
+		"smile":            "\xf0\x9f\x98\x8a",
+		"laughing":         "\xf0\x9f\x98\x82",
+		"cry":              "\xf0\x9f\x98\xa2",
+		"angry":            "\xf0\x9f\x98\xa0",
+		"clap":             "\xf0\x9f\x91\x8f",
+		"fire":             "\xf0\x9f\x94\xa5",
+		"eyes":             "\xf0\x9f\x91\x80",
+		"rocket":           "\xf0\x9f\x9a\x80",
+		"100":              "\xf0\x9f\x92\xaf",
+		"pray":             "\xf0\x9f\x99\x8f",
+		"tada":             "\xf0\x9f\x8e\x89",
+		"white_check_mark": "\xe2\x9c\x85",
+		"x":                "\xe2\x9d\x8c",
+		"warning":          "\xe2\x9a\xa0\xef\xb8\x8f",
+		"question":         "\xe2\x9d\x93",
+		"exclamation":      "\xe2\x9d\x97",
 		"heavy_plus_sign":  "+1",
 		"heavy_minus_sign": "-1",
 	}
@@ -968,38 +1317,117 @@ func (ap *ApiProvider) addCommonUnicodeEmojis() {
 }
 
 func (ap *ApiProvider) RefreshChannels(ctx context.Context) error {
-	if data, err := ioutil.ReadFile(ap.channelsCache); err == nil {
-		var cachedChannels []Channel
-		if err := json.Unmarshal(data, &cachedChannels); err != nil {
-			ap.logger.Warn("Failed to unmarshal channels cache, will refetch",
-				zap.String("cache_file", ap.channelsCache),
-				zap.Error(err))
-		} else {
-			for _, c := range cachedChannels {
-				ap.channels[c.ID] = c
-				ap.channelsInv[c.Name] = c.ID
+	return ap.refreshChannelsInternal(ctx, false)
+}
+
+// ForceRefreshChannels bypasses the cache and fetches fresh channel data from Slack API.
+// Use this when a channel lookup fails to attempt recovery with fresh data.
+// Rate limited by SLACK_MCP_MIN_REFRESH_INTERVAL (default 30s) to prevent API abuse.
+// Returns ErrRefreshRateLimited if refresh is skipped due to rate limiting.
+func (ap *ApiProvider) ForceRefreshChannels(ctx context.Context) error {
+	if ap.minRefreshInterval > 0 {
+		// Use single lock scope for check-and-update to prevent TOCTOU race
+		ap.channelsMu.Lock()
+		sinceLast := time.Since(ap.lastForcedChannelsRefresh)
+		if sinceLast < ap.minRefreshInterval {
+			ap.channelsMu.Unlock()
+			ap.logger.Debug("Skipping forced channels refresh, within rate limit",
+				zap.Duration("since_last", sinceLast),
+				zap.Duration("min_interval", ap.minRefreshInterval))
+			return ErrRefreshRateLimited
+		}
+		// Update timestamp before refresh to prevent concurrent forced refreshes
+		ap.lastForcedChannelsRefresh = time.Now()
+		ap.channelsMu.Unlock()
+	}
+
+	ap.logger.Info("Force refreshing channels cache")
+	return ap.refreshChannelsInternal(ctx, true)
+}
+
+func (ap *ApiProvider) refreshChannelsInternal(ctx context.Context, force bool) error {
+	ap.channelsMu.Lock()
+	defer ap.channelsMu.Unlock()
+
+	// Check if we should use cache (not forced, cache exists, and within TTL)
+	if !force {
+		if data, err := os.ReadFile(ap.channelsCachePath); err == nil {
+			var cachedChannels []Channel
+			if err := json.Unmarshal(data, &cachedChannels); err != nil {
+				ap.logger.Warn("Failed to unmarshal channels cache, will refetch",
+					zap.String("cache_file", ap.channelsCachePath),
+					zap.Error(err))
+			} else if len(cachedChannels) == 0 {
+				ap.logger.Warn("Channels cache is empty or null, will refetch",
+					zap.String("cache_file", ap.channelsCachePath))
+			} else {
+				// Check cache TTL using file modification time
+				cacheValid := true
+				if ap.cacheTTL > 0 {
+					if fileInfo, err := os.Stat(ap.channelsCachePath); err == nil {
+						cacheAge := time.Since(fileInfo.ModTime())
+						if cacheAge > ap.cacheTTL {
+							ap.logger.Info("Channels cache expired, will refetch",
+								zap.Duration("cache_age", cacheAge),
+								zap.Duration("ttl", ap.cacheTTL),
+								zap.String("cache_file", ap.channelsCachePath))
+							cacheValid = false
+						}
+					}
+				}
+
+				if cacheValid {
+					// Re-map channels with current users cache to ensure DM names are populated
+					usersMap := ap.ProvideUsersMap().Users
+					newSnapshot := &ChannelsCache{
+						Channels:    make(map[string]Channel, len(cachedChannels)),
+						ChannelsInv: make(map[string]string, len(cachedChannels)),
+					}
+					for _, c := range cachedChannels {
+						// For IM channels, re-generate the name and purpose using current users cache
+						if c.IsIM {
+							// Re-map the channel to get updated user name if available
+							remappedChannel := mapChannel(
+								c.ID, "", "", c.Topic, c.Purpose,
+								c.User, c.Members, c.MemberCount,
+								c.IsIM, c.IsMpIM, c.IsPrivate, c.IsExtShared,
+								usersMap,
+							)
+							newSnapshot.Channels[c.ID] = remappedChannel
+							newSnapshot.ChannelsInv[remappedChannel.Name] = c.ID
+						} else {
+							newSnapshot.Channels[c.ID] = c
+							newSnapshot.ChannelsInv[c.Name] = c.ID
+						}
+					}
+					ap.channelsSnapshot.Store(newSnapshot)
+					ap.logger.Info("Loaded channels from cache and re-mapped DM names",
+						zap.Int("count", len(cachedChannels)),
+						zap.String("cache_file", ap.channelsCachePath))
+					ap.channelsReady = true
+					return nil
+				}
 			}
-			ap.logger.Info("Loaded channels from cache",
-				zap.Int("count", len(cachedChannels)),
-				zap.String("cache_file", ap.channelsCache))
-			ap.channelsReady = true
-			return nil
 		}
 	}
 
+	// Fetch fresh data from Slack API
 	channels := ap.GetChannels(ctx, AllChanTypes)
 
-	if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
+	if len(channels) == 0 {
+		ap.logger.Warn("No channels fetched from Slack API, not writing empty cache",
+			zap.String("cache_file", ap.channelsCachePath))
+	} else if data, err := json.MarshalIndent(channels, "", "  "); err != nil {
 		ap.logger.Error("Failed to marshal channels for cache", zap.Error(err))
 	} else {
-		if err := ioutil.WriteFile(ap.channelsCache, data, 0644); err != nil {
+		if err := os.WriteFile(ap.channelsCachePath, data, 0644); err != nil {
 			ap.logger.Error("Failed to write cache file",
-				zap.String("cache_file", ap.channelsCache),
+				zap.String("cache_file", ap.channelsCachePath),
 				zap.Error(err))
 		} else {
 			ap.logger.Info("Wrote channels to cache",
 				zap.Int("count", len(channels)),
-				zap.String("cache_file", ap.channelsCache))
+				zap.String("cache_file", ap.channelsCachePath))
 		}
 	}
 
@@ -1015,13 +1443,14 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 		return nil, err
 	}
 
+	usersSnapshot := ap.usersSnapshot.Load()
 	var collectedIDs []string
 	for _, im := range boot.IMs {
 		if !im.IsShared && !im.IsExtShared {
 			continue
 		}
 
-		_, ok := ap.users[im.User]
+		_, ok := usersSnapshot.Users[im.User]
 		if !ok {
 			collectedIDs = append(collectedIDs, im.User)
 		}
@@ -1043,14 +1472,14 @@ func (ap *ApiProvider) GetSlackConnect(ctx context.Context) ([]slack.User, error
 	return res, nil
 }
 
-func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) []Channel {
-	if len(channelTypes) == 0 {
-		channelTypes = AllChanTypes
-	}
+func (ap *ApiProvider) GetChannelsType(ctx context.Context, channelType string) []Channel {
+	return ap.getChannelsMultiType(ctx, []string{channelType})
+}
 
+func (ap *ApiProvider) getChannelsMultiType(ctx context.Context, channelTypes []string) []Channel {
 	params := &slack.GetConversationsParameters{
-		Types:           AllChanTypes,
-		Limit:           1000,
+		Types:           channelTypes,
+		Limit:           999,
 		ExcludeArchived: true,
 	}
 
@@ -1069,20 +1498,32 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 		}
 
 		channels, nextcur, err = ap.client.GetConversationsContext(ctx, params)
+		ap.logger.Debug("Fetched channels",
+			zap.Strings("channelTypes", channelTypes),
+			zap.Int("count", len(channels)),
+		)
 		if err != nil {
 			ap.logger.Error("Failed to fetch channels", zap.Error(err))
 			break
 		}
 
-		chans = make([]Channel, 0, len(channels))
 		for _, channel := range channels {
-			ch := mapChannel(channel, ap.ProvideUsersMap().Users)
+			ch := mapChannel(
+				channel.ID,
+				channel.Name,
+				channel.NameNormalized,
+				channel.Topic.Value,
+				channel.Purpose.Value,
+				channel.User,
+				channel.Members,
+				channel.NumMembers,
+				channel.IsIM,
+				channel.IsMpIM,
+				channel.IsPrivate,
+				channel.IsExtShared,
+				ap.ProvideUsersMap().Users,
+			)
 			chans = append(chans, ch)
-		}
-
-		for _, ch := range chans {
-			ap.channels[ch.ID] = ch
-			ap.channelsInv[ch.Name] = ch.ID
 		}
 
 		if nextcur == "" {
@@ -1091,14 +1532,45 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 
 		params.Cursor = nextcur
 	}
+	return chans
+}
 
+func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) []Channel {
+	if len(channelTypes) == 0 {
+		channelTypes = AllChanTypes
+	}
+
+	// Fetch all channel types in a single paginated call. The standard
+	// conversations.list API supports multiple types per request, and the edge
+	// API (Enterprise Grid + non-OAuth) returns all types regardless. This
+	// avoids making 4 separate API round-trips (one per type).
+	chans := ap.getChannelsMultiType(ctx, AllChanTypes)
+
+	// Build new snapshot with all fetched channels
+	newSnapshot := &ChannelsCache{
+		Channels:    make(map[string]Channel, len(chans)),
+		ChannelsInv: make(map[string]string, len(chans)),
+	}
+	for _, ch := range chans {
+		newSnapshot.Channels[ch.ID] = ch
+		newSnapshot.ChannelsInv[ch.Name] = ch.ID
+	}
+	ap.channelsSnapshot.Store(newSnapshot)
+
+	// Filter by requested channel types
 	var res []Channel
 	for _, t := range channelTypes {
-		for _, channel := range ap.channels {
-			if (t == "public_channel" && !channel.IsPrivate && !channel.IsIM && !channel.IsMpIM) ||
-				(t == "private_channel" && channel.IsPrivate && !channel.IsIM && !channel.IsMpIM) ||
-				(t == "im" && channel.IsIM) ||
-				(t == "mpim" && channel.IsMpIM) {
+		for _, channel := range newSnapshot.Channels {
+			if t == "public_channel" && !channel.IsPrivate && !channel.IsIM && !channel.IsMpIM {
+				res = append(res, channel)
+			}
+			if t == "private_channel" && channel.IsPrivate && !channel.IsIM && !channel.IsMpIM {
+				res = append(res, channel)
+			}
+			if t == "im" && channel.IsIM {
+				res = append(res, channel)
+			}
+			if t == "mpim" && channel.IsMpIM {
 				res = append(res, channel)
 			}
 		}
@@ -1108,17 +1580,13 @@ func (ap *ApiProvider) GetChannels(ctx context.Context, channelTypes []string) [
 }
 
 func (ap *ApiProvider) ProvideUsersMap() *UsersCache {
-	return &UsersCache{
-		Users:    ap.users,
-		UsersInv: ap.usersInv,
-	}
+	// Atomic load - no lock needed, snapshot is immutable
+	return ap.usersSnapshot.Load()
 }
 
 func (ap *ApiProvider) ProvideChannelsMaps() *ChannelsCache {
-	return &ChannelsCache{
-		Channels:    ap.channels,
-		ChannelsInv: ap.channelsInv,
-	}
+	// Atomic load - no lock needed, snapshot is immutable
+	return ap.channelsSnapshot.Load()
 }
 
 func (ap *ApiProvider) ProvideEmojiMap() *EmojiCache {
@@ -1155,6 +1623,16 @@ func (ap *ApiProvider) Slack() SlackAPI {
 	return ap.client
 }
 
+func (ap *ApiProvider) IsBotToken() bool {
+	client, ok := ap.client.(*MCPSlackClient)
+	return ok && client != nil && client.IsBotToken()
+}
+
+func (ap *ApiProvider) IsOAuth() bool {
+	client, ok := ap.client.(*MCPSlackClient)
+	return ok && client != nil && client.IsOAuth()
+}
+
 // SlackBot returns the bot client for bot-identity posting
 // Returns nil if bot token is not configured
 func (ap *ApiProvider) SlackBot() *slack.Client {
@@ -1172,15 +1650,81 @@ func (ap *ApiProvider) HasSlackBot() bool {
 	return false
 }
 
-func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
-	channelName := channel.Name
-	finalPurpose := channel.Purpose.Value
-	finalTopic := channel.Topic.Value
-	finalMemberCount := channel.NumMembers
+// SearchUsers searches for users by name, email, or display name.
+// For OAuth tokens (xoxp/xoxb), it searches the local users cache using regex matching.
+// For browser tokens (xoxc/xoxd), it uses the edge API's UsersSearch method.
+func (ap *ApiProvider) SearchUsers(ctx context.Context, query string, limit int) ([]slack.User, error) {
+	if ap.IsOAuth() {
+		return ap.searchUsersInCache(query, limit)
+	}
 
-	if channel.IsIM {
+	return ap.client.UsersSearch(ctx, query, limit)
+}
+
+// searchUsersInCache performs a case-insensitive regex search on cached users.
+// Matches against username, real name, display name, and email.
+func (ap *ApiProvider) searchUsersInCache(query string, limit int) ([]slack.User, error) {
+	if !ap.usersReady {
+		return nil, ErrUsersNotReady
+	}
+
+	pattern, err := regexp.Compile("(?i)" + regexp.QuoteMeta(query))
+	if err != nil {
+		return nil, err
+	}
+
+	usersCache := ap.usersSnapshot.Load()
+	var results []slack.User
+	for _, user := range usersCache.Users {
+		if user.Deleted {
+			continue
+		}
+
+		if pattern.MatchString(user.Name) ||
+			pattern.MatchString(user.RealName) ||
+			pattern.MatchString(user.Profile.DisplayName) ||
+			pattern.MatchString(user.Profile.Email) {
+			results = append(results, user)
+
+			if len(results) >= limit {
+				break
+			}
+		}
+	}
+
+	return results, nil
+}
+
+func mapChannel(
+	id, name, nameNormalized, topic, purpose, user string,
+	members []string,
+	numMembers int,
+	isIM, isMpIM, isPrivate, isExtShared bool,
+	usersMap map[string]slack.User,
+) Channel {
+	channelName := name
+	finalPurpose := purpose
+	finalTopic := topic
+	finalMemberCount := numMembers
+
+	var userID string
+	if isIM {
 		finalMemberCount = 2
-		if u, ok := usersMap[channel.User]; ok {
+		userID = user // Store the user ID for later re-mapping
+
+		// If user field is empty but we have members, try to extract from members
+		if userID == "" && len(members) > 0 {
+			// For IM channels, members should contain the other user's ID
+			// Try each member to find a valid user in the users map
+			for _, memberID := range members {
+				if _, ok := usersMap[memberID]; ok {
+					userID = memberID
+					break
+				}
+			}
+		}
+
+		if u, ok := usersMap[userID]; ok {
 			channelName = "@" + u.Name
 			// Use RealName, fallback to Profile.RealName if empty
 			displayName := u.RealName
@@ -1192,16 +1736,19 @@ func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
 				displayName += " (deactivated)"
 			}
 			finalPurpose = "DM with " + displayName
+		} else if userID != "" {
+			channelName = "@" + userID
+			finalPurpose = "DM with " + userID
 		} else {
-			channelName = "@" + channel.User
-			finalPurpose = "DM with " + channel.User
+			channelName = "@"
+			finalPurpose = "DM with "
 		}
 		finalTopic = ""
-	} else if channel.IsMpIM {
-		if len(channel.Members) > 0 {
-			finalMemberCount = len(channel.Members)
+	} else if isMpIM {
+		if len(members) > 0 {
+			finalMemberCount = len(members)
 			var userNames []string
-			for _, uid := range channel.Members {
+			for _, uid := range members {
 				if u, ok := usersMap[uid]; ok {
 					// Use RealName, fallback to Profile.RealName if empty
 					displayName := u.RealName
@@ -1217,51 +1764,32 @@ func mapChannel(channel slack.Channel, usersMap map[string]slack.User) Channel {
 					userNames = append(userNames, uid)
 				}
 			}
-			channelName = "@" + channel.NameNormalized
+			channelName = "@" + nameNormalized
 			finalPurpose = "Group DM with " + strings.Join(userNames, ", ")
 			finalTopic = ""
 		}
 	} else {
 		// Use nameNormalized if available, otherwise fall back to name
-		displayName := channel.NameNormalized
+		displayName := nameNormalized
 		if displayName == "" {
-			displayName = channel.Name
+			displayName = name
 		}
 		channelName = "#" + displayName
 	}
 
 	return Channel{
-		ID:             channel.ID,
+		ID:             id,
 		Name:           channelName,
-		NameNormalized: channel.NameNormalized,
+		NameNormalized: nameNormalized,
 		Topic:          finalTopic,
 		Purpose:        finalPurpose,
 		MemberCount:    finalMemberCount,
-		Members:        channel.Members,
-		IsIM:           channel.IsIM,
-		IsMpIM:         channel.IsMpIM,
-		IsPrivate:      channel.IsPrivate,
-		// Map additional fields from boot data (these exist in slack.Channel)
-		Creator:            channel.Creator,
-		Created:            int64(channel.Created),
-		IsArchived:         channel.IsArchived,
-		IsMember:           channel.IsMember,
-		IsGeneral:          channel.IsGeneral,
-		IsShared:           channel.IsShared,
-		IsExtShared:        channel.IsExtShared,
-		IsOrgShared:        channel.IsOrgShared,
-		IsChannel:          channel.IsChannel,
-		IsGroup:            channel.IsGroup,
-		IsPendingExtShared: channel.IsPendingExtShared,
-		IsOpen:             channel.IsOpen,
-		Unlinked:           int64(channel.Unlinked),
-		ContextTeamID:      channel.ContextTeamID,
-		SharedTeamIDs:      channel.SharedTeamIDs,
-		LastRead:           channel.LastRead,
-		Latest:             "", // channel.Latest is a *Message, not a string
-		// These fields need special handling or are not available in slack.Channel
-		IsFrozen: false, // Not available in slack.Channel
-		Updated:  0,     // Not available in slack.Channel
+		Members:        members,
+		IsIM:           isIM,
+		IsMpIM:         isMpIM,
+		IsPrivate:      isPrivate,
+		IsExtShared:    isExtShared,
+		User:           userID,
 	}
 }
 
@@ -1302,7 +1830,8 @@ func (ap *ApiProvider) ResolveBotIDToUser(botID string) (slack.User, bool) {
 	}
 
 	// Not in cache, search through users list for matching app_id
-	for _, user := range ap.users {
+	usersSnapshot := ap.usersSnapshot.Load()
+	for _, user := range usersSnapshot.Users {
 		if user.IsBot && user.Profile.ApiAppID == botInfo.AppID {
 			// Found it! Cache both mappings
 			ap.appIDToUser[botInfo.AppID] = user

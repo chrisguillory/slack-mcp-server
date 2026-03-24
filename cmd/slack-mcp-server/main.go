@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server"
@@ -23,9 +24,26 @@ var defaultSsePort = 13080
 
 func main() {
 	var transport string
-	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio or sse)")
-	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio or sse)")
+	var enabledToolsFlag string
+	flag.StringVar(&transport, "t", "stdio", "Transport type (stdio, sse or http)")
+	flag.StringVar(&transport, "transport", "stdio", "Transport type (stdio, sse or http)")
+	flag.StringVar(&enabledToolsFlag, "e", "", "Comma-separated list of enabled tools (empty = all tools)")
+	flag.StringVar(&enabledToolsFlag, "enabled-tools", "", "Comma-separated list of enabled tools (empty = all tools)")
 	flag.Parse()
+
+	if enabledToolsFlag == "" {
+		enabledToolsFlag = os.Getenv("SLACK_MCP_ENABLED_TOOLS")
+	}
+
+	var enabledTools []string
+	if enabledToolsFlag != "" {
+		for _, tool := range strings.Split(enabledToolsFlag, ",") {
+			tool = strings.TrimSpace(tool)
+			if tool != "" {
+				enabledTools = append(enabledTools, tool)
+			}
+		}
+	}
 
 	logger, err := newLogger(transport)
 	if err != nil {
@@ -33,7 +51,8 @@ func main() {
 	}
 	defer logger.Sync()
 
-	err = validateToolConfig(os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL"))
+	addMessageToolEnv := os.Getenv("SLACK_MCP_ADD_MESSAGE_TOOL")
+	err = validateToolConfig(addMessageToolEnv)
 	if err != nil {
 		logger.Fatal("error in SLACK_MCP_ADD_MESSAGE_TOOL",
 			zap.String("context", "console"),
@@ -50,8 +69,16 @@ func main() {
 		)
 	}
 
+	err = server.ValidateEnabledTools(enabledTools)
+	if err != nil {
+		logger.Fatal("error in SLACK_MCP_ENABLED_TOOLS",
+			zap.String("context", "console"),
+			zap.Error(err),
+		)
+	}
+
 	p := provider.New(transport, logger)
-	s := server.NewMCPServer(p, logger)
+	s := server.NewMCPServer(p, logger, enabledTools)
 
 	// Set up signal handling for graceful shutdown (ensures cleanup runs)
 	sigChan := make(chan os.Signal, 1)
@@ -83,6 +110,12 @@ func main() {
 
 	switch transport {
 	case "stdio":
+		for {
+			if ready, _ := p.IsReady(); ready {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if err := s.ServeStdio(); err != nil {
 			logger.Fatal("Server error",
 				zap.String("context", "console"),
@@ -119,11 +152,41 @@ func main() {
 				zap.Error(err),
 			)
 		}
+	case "http":
+		host := os.Getenv("SLACK_MCP_HOST")
+		if host == "" {
+			host = defaultSseHost
+		}
+		port := os.Getenv("SLACK_MCP_PORT")
+		if port == "" {
+			port = strconv.Itoa(defaultSsePort)
+		}
+
+		httpServer := s.ServeHTTP(":" + port)
+		logger.Info(
+			fmt.Sprintf("HTTP server listening on %s", fmt.Sprintf("%s:%s", host, port)),
+			zap.String("context", "console"),
+			zap.String("host", host),
+			zap.String("port", port),
+		)
+
+		if ready, _ := p.IsReady(); !ready {
+			logger.Info("Slack MCP Server is still warming up caches",
+				zap.String("context", "console"),
+			)
+		}
+
+		if err := httpServer.Start(host + ":" + port); err != nil {
+			logger.Fatal("Server error",
+				zap.String("context", "console"),
+				zap.Error(err),
+			)
+		}
 	default:
 		logger.Fatal("Invalid transport type",
 			zap.String("context", "console"),
 			zap.String("transport", transport),
-			zap.String("allowed", "stdio,sse"),
+			zap.String("allowed", "stdio, sse, http"),
 		)
 	}
 }
