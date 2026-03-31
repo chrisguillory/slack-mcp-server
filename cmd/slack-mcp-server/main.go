@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/korotovsky/slack-mcp-server/pkg/provider"
 	"github.com/korotovsky/slack-mcp-server/pkg/server"
@@ -110,12 +109,6 @@ func main() {
 
 	switch transport {
 	case "stdio":
-		for {
-			if ready, _ := p.IsReady(); ready {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
 		if err := s.ServeStdio(); err != nil {
 			logger.Fatal("Server error",
 				zap.String("context", "console"),
